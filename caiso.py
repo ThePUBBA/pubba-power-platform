@@ -1,6 +1,7 @@
 import pandas as pd
 import requests
 from datetime import datetime
+from io import StringIO
 
 def fetch_lmp_data(location="TH_NP15_GEN-APND", market="LMP", date=None):
     if date is None:
@@ -20,7 +21,7 @@ def fetch_lmp_data(location="TH_NP15_GEN-APND", market="LMP", date=None):
     response = requests.get(url, params=params)
     response.raise_for_status()
 
-    df = pd.read_csv(pd.compat.StringIO(response.text))
+    df = pd.read_csv(StringIO(response.text))
     df = df[["LOCATION", "OPR_DT", "INTERVAL_NUM", "LMP"]]
     df.columns = ["location", "date", "hour", "price"]
     return df
