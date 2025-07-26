@@ -1,20 +1,17 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
+from gridstatus import CAISO
 from datetime import date
-from only1_iso import ISO
 
 app = FastAPI()
-iso = ISO()
+iso = CAISO()
 
 @app.get("/")
 def root():
-    return {"status": "Only1 LMP API is live"}
+    return {"message": "Only1 LMP API is running"}
 
 @app.get("/lmp")
-def get_lmp(market: str = "LMP", location: str = "TH_NP15_GEN-APND"):
+def get_lmp(market: str = "RTM", location: str = "TH_NP15_GEN-APND"):
     today = date.today().strftime("%Y-%m-%d")
-    try:
-        df = iso.get_lmp(date=today, market=market, locations=[location])
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    return df.to_dict(orient="records")
+    data = iso.get_lmp(date=today, market=market, locations=[location])
+    return data.to_dict(orient="records")
 
