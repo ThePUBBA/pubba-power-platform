@@ -15,14 +15,16 @@ def fetch_lmp_data(location="TH_NP15_GEN-APND", market="LMP", date=None):
         "market_run_id": market,
         "node": location,
         "version": 1,
-        "resultformat": 6
+        "resultformat": 6,
     }
 
     response = requests.get(url, params=params)
     response.raise_for_status()
 
     df = pd.read_csv(StringIO(response.text))
-    df = df[["LOCATION", "OPR_DT", "INTERVAL_NUM", "LMP"]]
+    print(df.columns)  # <-- This will show the real column names from CAISO
+
+    df = df[["LOCATION", "OPR_DT", "INTERVAL_NUM", "LMP"]]  # We’ll fix this once we see the actual columns
     df.columns = ["location", "date", "hour", "price"]
     return df
 
