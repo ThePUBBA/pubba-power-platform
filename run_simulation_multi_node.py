@@ -1,142 +1,183 @@
-import os, glob, csv
-from datetime import datetime
-from typing import Dict, List, Tuple
-import plotly.graph_objs as go
+#!/usr/bin/env python3
+"""
+Only1 Power — run_simulation_multi_node.py (POC, DAM bulk + RTM optional)
+- POC default: --market dam, pulls ALL once/day then filters (fewer API calls, avoids 429)
+- --yesterday / --date supported; RTM optional with --market rtm
+- Simple threshold sim + Plotly reports
+"""
+from __future__ import annotations
+import argparse, os
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Dict, List
+import pandas as pd
+import plotly.graph_objects as go
 from plotly.offline import plot
+from oasis_client import OasisClient
+# optional custom strategy
+try:
+    from strategy import simulate_node as simulate_node_external  # type: ignore
+except Exception:
+    simulate_node_external = None
 
-ROOT_DIR = os.path.dirname(__file__)
-DATA_DIR = os.path.join(ROOT_DIR, "data")
-REPORT_DIR = os.path.join(ROOT_DIR, "reports")
-os.makedirs(DATA_DIR, exist_ok=True)
-os.makedirs(REPORT_DIR, exist_ok=True)
+# Node aliases: RTM uses SLAP_*, DAM uses DLAP_*
+ALIAS_RTM = {"MPBBAC":"SLAP_BANC-APND","MPBNCA":"SLAP_NCPA-APND","MPBPGE":"SLAP_PGAE-APND"}
+ALIAS_DAM = {"MPBBAC":"DLAP_BANC-APND","MPBNCA":"DLAP_NCPA-APND","MPBPGE":"DLAP_PGAE-APND"}
 
-# Auto-discover data/lmp_<NODE>_<DATE>.csv
-NODE_FILES: Dict[str, str] = {}
-for path in sorted(glob.glob(os.path.join(DATA_DIR, "lmp_*.csv"))):
-    fname = os.path.basename(path)
-    parts = fname.split("_")
-    node = parts[1] if len(parts) >= 3 else fname
-    NODE_FILES[node] = path  # full path
+@dataclass
+class Thresholds:
+    charge_lmp: float = float(os.getenv("ONLY1_CHARGE_LMP", 30))
+    discharge_lmp: float = float(os.getenv("ONLY1_DISCHARGE_LMP", 60))
+    soc_min_pct: float = float(os.getenv("ONLY1_SOC_MIN_PCT", 5))
+    max_cycles_per_day: float = float(os.getenv("ONLY1_MAX_CYCLES", 1.5))
 
-print("📂 Found CSVs:")
-for node, full_path in NODE_FILES.items():
-    print(f"  {node}: {full_path}")
+def simulate_node_fallback(df_prices: pd.DataFrame, capacity_mwh: float, efficiency_rt: float, th: Thresholds) -> dict:
+    if df_prices.empty: return {"events": [], "profit": 0.0, "utilization_pct": 0.0}
+    df = df_prices.sort_values("timestamp").copy()
+    step = capacity_mwh / 12.0  # 5-min slice of 1C
+    soc = capacity_mwh * 0.5; revenue=0.0; through=0.0; last="idle"; events=[]
+    for _, r in df.iterrows():
+        p = float(r["lmp"]) if pd.notna(r["lmp"]) else None
+        if p is None: continue
+        if p >= th.discharge_lmp and soc > (th.soc_min_pct/100.0)*capacity_mwh:
+            e = min(step, soc); soc -= e; revenue += e*p; through += e; mode="discharge"
+        elif p <= th.charge_lmp and soc < capacity_mwh:
+            e = min(step, capacity_mwh - soc); revenue -= e*p; soc += e*efficiency_rt; through += e; mode="charge"
+        else:
+            mode="idle"
+        if mode != last:
+            events.append({"timestamp": r["timestamp"], "mode": mode, "price": p, "soc_mwh": soc}); last=mode
+    util = 100.0 * min(1.0, through/capacity_mwh)
+    return {"events": events, "profit": revenue, "utilization_pct": util}
 
-# Params (5‑min timestep)
-CAPACITY_MWH = 5.0
-POWER_MW = 1.0
-ROUND_TRIP_EFF = 0.85
-CHARGE_TH = 30.0
-DISCHARGE_TH = 60.0
+def save_node_report(node: str, prices: pd.DataFrame, res: dict, th: Thresholds, out_dir: Path) -> Path:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M")
+    path = out_dir / f"{node}_dispatch_{ts}.html"
+    fig = plot_node(node, prices, res, th)
+    plot(fig, filename=str(path), auto_open=False, include_plotlyjs="cdn")
+    return path
 
-def load_lmp_csv(path: str) -> Tuple[List[datetime], List[float]]:
-    times: List[datetime] = []
-    prices: List[float] = []
-    with open(path, "r", newline="") as f:
-        rdr = csv.DictReader(f)
-        for row in rdr:
-            times.append(datetime.fromisoformat(row["Time"]))
-            prices.append(float(row["LMP"]))
-    return times, prices
+def plot_node(node: str, prices: pd.DataFrame, res: dict, th: Thresholds):
+    fig = plotly_figure()
+    if not prices.empty:
+        fig.add_trace(go.Scatter(x=prices["timestamp"], y=prices["lmp"], name="LMP ($/MWh)", line=dict(color="#2a6efb")))
+    fig.add_hline(y=th.charge_lmp, line_dash="dash", line_color="#22c55e", annotation_text="Charge TH")
+    fig.add_hline(y=th.discharge_lmp, line_dash="dash", line_color="#ef4444", annotation_text="Discharge TH")
+    title=f"Only1 — {node} | Profit ${res.get('profit',0):,.2f} | Util {res.get('utilization_pct',0):.1f}%"
+    fig.update_layout(title=title, xaxis_title="Time (UTC)", yaxis_title="LMP ($/MWh)", template="plotly_white")
+    return fig
 
-def simulate_5min(prices: List[float],
-                  capacity_mwh=CAPACITY_MWH, power_mw=POWER_MW,
-                  rte=ROUND_TRIP_EFF, charge_th=CHARGE_TH, discharge_th=DISCHARGE_TH):
-    dt = 5/60.0
-    eta_c = rte ** 0.5
-    eta_d = rte ** 0.5
-    soc = 0.0
-    soc_series, charge_mw, discharge_mw = [], [], []
-    profit = 0.0
+def plotly_figure(): return go.Figure()
 
-    for p in prices:
-        p = float(p); c_mw = d_mw = 0.0
-        if p <= charge_th and soc < capacity_mwh:
-            market_e = power_mw * dt
-            headroom = capacity_mwh - soc
-            delta_soc_full = market_e * eta_c
-            if delta_soc_full > headroom:
-                market_e = headroom / eta_c
-            c_mw = market_e / dt
-            soc += market_e * eta_c
-            profit -= p * market_e
-        elif p >= discharge_th and soc > 0:
-            internal_e = min(power_mw * dt, soc)
-            delivered = internal_e * eta_d
-            d_mw = delivered / dt
-            soc -= internal_e
-            profit += p * delivered
-        soc_series.append(soc); charge_mw.append(c_mw); discharge_mw.append(d_mw)
+def save_multi(results: Dict[str, dict], out_dir: Path) -> Path:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M")
+    path = out_dir / f"multi_node_lmp_{ts}.html"
+    rows = [{"node":n, "profit":r.get("profit",0.0), "utilization_pct": r.get("utilization_pct",0.0)} for n,r in results.items()]
+    df = pd.DataFrame(rows)
+    html = f"""<html><head><meta charset='utf-8'><title>Only1 Multi-Node</title></head>
+    <body style='font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;'>
+      <h2>Only1 Power — Multi-Node Summary</h2>
+      {df.to_html(index=False, float_format=lambda x: f"${x:,.2f}" if isinstance(x,(int,float)) else x)}
+    </body></html>"""
+    path.write_text(html); return path
 
-    avg_abs_power = (sum(charge_mw) + sum(discharge_mw)) / len(prices) if prices else 0.0
-    utilization = avg_abs_power / power_mw if power_mw else 0.0
-    return soc_series, charge_mw, discharge_mw, profit, utilization
-
-def plot_node_report(node, times, prices, soc, charges, discharges, profit, utilization):
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=times, y=prices, name="LMP ($/MWh)", line=dict(color="#2563EB")))
-    fig.add_trace(go.Scatter(x=times, y=soc, name="SOC (MWh)", yaxis="y2", line=dict(color="#7C3AED", dash="dot")))
-    fig.add_trace(go.Bar(x=times, y=charges, name="Charge (MW)", marker_color="#F59E0B", opacity=0.45))
-    fig.add_trace(go.Bar(x=times, y=discharges, name="Discharge (MW)", marker_color="#DC2626", opacity=0.45))
-    fig.add_hline(y=CHARGE_TH, line=dict(color="#10B981", dash="dash"), annotation_text="Charge TH", annotation_position="top left")
-    fig.add_hline(y=DISCHARGE_TH, line=dict(color="#EF4444", dash="dash"), annotation_text="Discharge TH", annotation_position="bottom left")
-
-    fig.update_layout(
-        title=f"Only1 Power — {node} Dispatch | Profit: ${profit:,.2f} | Utilization: {utilization:.0%}",
-        xaxis_title="Time",
-        yaxis=dict(title="LMP ($/MWh)"),
-        yaxis2=dict(title="SOC (MWh)", overlaying="y", side="right"),
-        barmode="overlay",
-        template="plotly_white",
-        legend=dict(orientation="h", y=-0.25),
-        margin=dict(l=60, r=60, t=70, b=80)
-    )
-    # Single footer brand (no duplicate at top)
-    fig.add_annotation(text="Only1 Power · only1power.com", xref="paper", yref="paper",
-                       x=0.0, y=-0.22, showarrow=False, font=dict(size=12, color="#6B7280"))
-
-    out_path = os.path.join(REPORT_DIR, f"{node}_dispatch_{datetime.now().strftime('%Y%m%d_%H%M')}.html")
-    plot(fig, filename=out_path, auto_open=False)
-    return out_path
-
-def plot_multi_node(prices_by_node: Dict[str, List[float]], times: List[datetime]):
-    fig = go.Figure()
-    for node, series in prices_by_node.items():
-        fig.add_trace(go.Scatter(x=times, y=series, mode="lines", name=node))
-    fig.add_hline(y=CHARGE_TH, line=dict(color="#10B981", dash="dash"))
-    fig.add_hline(y=DISCHARGE_TH, line=dict(color="#EF4444", dash="dash"))
-    fig.update_layout(title="CAISO Multi‑Node LMP Comparison", xaxis_title="Time",
-                      yaxis_title="LMP ($/MWh)", template="plotly_white",
-                      legend=dict(orientation="h", y=-0.2))
-    out_path = os.path.join(REPORT_DIR, f"multi_node_lmp_{datetime.now().strftime('%Y%m%d_%H%M')}.html")
-    plot(fig, filename=out_path, auto_open=False)
-    return out_path
+def parse_date(d: str) -> datetime:
+    y,m,day = map(int, d.split("-"))
+    return datetime(y,m,day,tzinfo=timezone.utc)
 
 def main():
-    if not NODE_FILES:
-        print("⚠️  No CSVs found in ./data")
-        return
-    multi_prices: Dict[str, List[float]] = {}
-    base_times: List[datetime] = []
-    profit_table: List[Tuple[str, float]] = []
-    for node, path in NODE_FILES.items():
-        if not os.path.exists(path):
-            print(f"⚠️  Skipping {node}: not found -> {path}")
-            continue
-        times, prices = load_lmp_csv(path)
-        if not base_times: base_times = times
-        soc, ch, dis, profit, util = simulate_5min(prices)
-        out = plot_node_report(node, times, prices, soc, ch, dis, profit, util)
-        print(f"✅ Saved node report: {out}")
-        profit_table.append((node, round(profit,2)))
-        multi_prices[node] = prices
-    if multi_prices and base_times:
-        out = plot_multi_node(multi_prices, base_times)
-        print(f"✅ Saved multi‑node chart: {out}")
-    if profit_table:
-        print("\n📊 Profit by Node:")
-        for n,p in profit_table:
-            print(f"  {n}: ${p:,.2f}")
+    p = argparse.ArgumentParser(description="Only1 multi-node sim (POC bulk DAM, RTM optional)")
+    p.add_argument("--nodes", type=str, default=os.getenv("ONLY1_NODES","MPBBAC,MPBNCA,MPBPGE"))
+    p.add_argument("--market", choices=["dam","rtm"], default=os.getenv("ONLY1_MARKET","dam"))
+    p.add_argument("--live", action="store_true")
+    p.add_argument("--hours", type=int, default=int(os.getenv("ONLY1_LIVE_HOURS",6)))
+    p.add_argument("--yesterday", action="store_true")
+    p.add_argument("--date", type=str)
+    p.add_argument("--data-dir", type=str, default=os.getenv("ONLY1_DATA_DIR","data"))
+    p.add_argument("--reports-dir", type=str, default=os.getenv("ONLY1_REPORTS_DIR","reports"))
+    p.add_argument("--capacity-mwh", type=float, default=float(os.getenv("ONLY1_CAPACITY_MWH",10)))
+    p.add_argument("--efficiency-rt", type=float, default=float(os.getenv("ONLY1_EFFICIENCY_RT",0.85)))
+    p.add_argument("--charge-lmp", type=float, default=float(os.getenv("ONLY1_CHARGE_LMP",30)))
+    p.add_argument("--discharge-lmp", type=float, default=float(os.getenv("ONLY1_DISCHARGE_LMP",60)))
+    p.add_argument("--soc-min-pct", type=float, default=float(os.getenv("ONLY1_SOC_MIN_PCT",5)))
+    p.add_argument("--max-cycles", type=float, default=float(os.getenv("ONLY1_MAX_CYCLES",1.5)))
+    p.add_argument("--write-csv", action="store_true")
+    args = p.parse_args()
+
+    raw = [n.strip() for n in args.nodes.split(",") if n.strip()]
+    nodes = [ALIAS_DAM.get(n,n) if args.market=="dam" else ALIAS_RTM.get(n,n) for n in raw]
+
+    data_dir = Path(args.data_dir); reports_dir = Path(args.reports_dir)
+    data_dir.mkdir(parents=True, exist_ok=True); reports_dir.mkdir(parents=True, exist_ok=True)
+
+    now = datetime.now(timezone.utc)
+    use_date = parse_date(args.date) if args.date else (datetime(*(now - timedelta(days=1)).timetuple()[:3], tzinfo=timezone.utc) if args.yesterday else None)
+
+    client = OasisClient()
+    if use_date:
+        if args.market=="dam":
+            # DAM trade-day window: 07:00Z → +1d 07:00Z
+            trade_start = use_date + timedelta(hours=7)
+            print(f"🟦 DAM DATE mode (trade day UTC): {trade_start.isoformat()} → {(trade_start+timedelta(days=1)).isoformat()}")
+            # bulk fetch once
+            dfs = client.dam_lmp_bulk(trade_start, nodes)
+            all_prices: Dict[str, pd.DataFrame] = {}
+            for node in nodes:
+                df = dfs.get(node, pd.DataFrame(columns=["timestamp","node","lmp"]))
+                print(f"→ {node} (DAM): fetched {len(df)} rows "
+                      f"({df['timestamp'].min() if len(df) else 'NA'} → {df['timestamp'].max() if len(df) else 'NA'})")
+                if df.empty: continue
+                if args.write_csv:
+                    tag = (trade_start - timedelta(hours=7)).date().isoformat()
+                    df[["timestamp","lmp"]].to_csv(data_dir / f"lmp_{node}_{tag}.csv", index=False)
+                all_prices[node]=df
+        else:
+            # RTM trade-day window
+            start = use_date + timedelta(hours=7); end = start + timedelta(days=1)
+            print(f"🟧 RTM DATE mode (trade day UTC): {start.isoformat()} → {end.isoformat()}")
+            all_prices={}
+            for node in nodes:
+                df = client.rt5m_lmp(node, start, end)
+                print(f"→ {node} (RTM): fetched {len(df)} rows")
+                if not df.empty:
+                    all_prices[node]=df
+    elif args.live:
+        # Live (RTM): floor to last completed 5-min with 15-min lag
+        def floor5(dt): m=dt.minute-(dt.minute%5); return dt.replace(minute=m, second=0, microsecond=0)
+        end = floor5(now - timedelta(minutes=15)); start = end - timedelta(hours=args.hours)
+        print(f"🌐 LIVE mode: {start.isoformat()} → {end.isoformat()}")
+        all_prices={}
+        for node in nodes:
+            df = client.rt5m_lmp(node, start, end)
+            print(f"→ {node} (RTM LIVE): fetched {len(df)} rows")
+            if not df.empty: all_prices[node]=df
+    else:
+        print("📄 CSV mode (today)"); start = datetime(now.year,now.month,now.day,tzinfo=timezone.utc); end=now
+        all_prices={}
+
+    if not all_prices:
+        print("❌ No price data available; exiting."); return
+
+    th = Thresholds(args.charge_lmp, args.discharge_lmp, args.soc_min_pct, args.max_cycles)
+    results: Dict[str, dict] = {}
+    for node, df in all_prices.items():
+        if simulate_node_external:
+            res = simulate_node_external(df,
+                thresholds={"charge_lmp": th.charge_lmp, "discharge_lmp": th.discharge_lmp, "soc_min_pct": th.soc_min_pct, "max_cycles_per_day": th.max_cycles_per_day},
+                capacity_mwh=args.capacity_mwh, efficiency_rt=args.efficiency_rt)
+        else:
+            res = simulate_node_fallback(df, args.capacity_mwh, args.efficiency_rt, th)
+        results[node]=res
+        path = save_node_report(node, df, res, th, reports_dir)
+        print(f"✅ Saved node report: {path}")
+
+    multi = save_multi(results, reports_dir)
+    print(f"✅ Saved multi-node chart: {multi}")
+    print("\n📊 Profit by Node:")
+    for n, r in results.items(): print(f"  {n}: ${r.get('profit',0.0):.2f}")
 
 if __name__ == "__main__":
     main()
