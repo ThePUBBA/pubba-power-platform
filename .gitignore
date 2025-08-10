@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+*.log
+cron.log
+data/
+reports/latest/
+reports/archive/
+reports/*_dispatch_*.html
+reports/multi_node_*.html
+reports/last_run_summary.csv
+reports/history.csv
+backups/
+.env
+*.env
