@@ -67,6 +67,36 @@ def test_fetch_lmp_data_uses_oasis_and_returns_normalized_dataframe(monkeypatch)
     assert record["lmp_prc"] == 22.42
 
 
+def test_fetch_lmp_data_keeps_legacy_lmp_market_alias(monkeypatch):
+    csv = "\n".join(
+        [
+            "INTERVALSTARTTIME_GMT,INTERVALENDTIME_GMT,LMP_PRC",
+            "2025-04-01T07:00:00-00:00,2025-04-01T07:05:00-00:00,22.42",
+        ]
+    )
+    captured = {}
+
+    def mock_get(url, params, timeout):
+        captured["market"] = params["market_run_id"]
+        return MockResponse(zipped_file("lmp.csv", csv))
+
+    monkeypatch.setattr(caiso.requests, "get", mock_get)
+
+    fetch_lmp_data(market="LMP", date="2025-04-01")
+
+    assert captured["market"] == "RTM"
+
+
+def test_fetch_lmp_data_rejects_invalid_date():
+    with pytest.raises(ValueError, match="YYYY-MM-DD"):
+        fetch_lmp_data(date="04/01/2025")
+
+
+def test_fetch_lmp_data_rejects_invalid_market():
+    with pytest.raises(ValueError, match="market must be one of"):
+        fetch_lmp_data(market="BAD", date="2025-04-01")
+
+
 def test_fetch_lmp_data_wraps_http_errors(monkeypatch):
     def mock_get(url, params, timeout):
         return MockResponse(
@@ -107,4 +137,21 @@ def test_fetch_lmp_data_reports_oasis_error_payload(monkeypatch):
     monkeypatch.setattr(caiso.requests, "get", mock_get)
 
     with pytest.raises(CaisoOasisError, match="No data found"):
+        fetch_lmp_data(date="2025-04-01")
+
+
+def test_fetch_lmp_data_rejects_invalid_timestamps(monkeypatch):
+    csv = "\n".join(
+        [
+            "INTERVALSTARTTIME_GMT,INTERVALENDTIME_GMT,LMP_PRC",
+            "bad-date,2025-04-01T07:05:00-00:00,22.42",
+        ]
+    )
+
+    def mock_get(url, params, timeout):
+        return MockResponse(zipped_file("lmp.csv", csv))
+
+    monkeypatch.setattr(caiso.requests, "get", mock_get)
+
+    with pytest.raises(CaisoOasisError, match="invalid timestamps"):
         fetch_lmp_data(date="2025-04-01")
