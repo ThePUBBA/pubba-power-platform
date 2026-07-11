@@ -92,7 +92,7 @@ Sample response:
 
 ### `GET /simulate`
 
-Fetch historical LMP data, reuse the arbitrage window selection, and estimate dollar revenue for a leased storage asset.
+Fetch historical LMP data, reuse the arbitrage window selection, and estimate dollar revenue for a leased storage asset. This is a historical simulation using posted LMPs; it is not a forecast, live dispatch signal, or trading recommendation.
 
 Query parameters:
 
@@ -105,8 +105,8 @@ Query parameters:
 | `duration_hours` | `8` | Storage duration. Must be positive. |
 | `round_trip_efficiency` | `0.80` | Storage round-trip efficiency. Must be greater than `0` and less than or equal to `1`. |
 | `cycles` | `1` | Number of equivalent full cycles to simulate. Must be positive. |
-| `storage_fee_per_mwh` | `0` | Lease or tolling fee per MWh discharged. Must be non-negative. |
-| `variable_om_per_mwh` | `0` | Variable operating cost per MWh discharged. Must be non-negative. |
+| `storage_fee_per_mwh` | `0` | Lease or tolling fee in dollars per MWh discharged. Must be non-negative. |
+| `variable_om_per_mwh` | `0` | Variable operating cost in dollars per MWh discharged. Must be non-negative. |
 
 Example:
 
@@ -148,24 +148,27 @@ Sample response:
 }
 ```
 
+Returned price fields are dollars per MWh. Returned margin, revenue, cost, and fee fields are dollars unless the field name explicitly says `per_mw` or `per_mwh`.
+
 ## Formula Assumptions
 
 - The service selects the lowest average contiguous charging window and the highest average non-overlapping contiguous discharging window.
-- `gross_price_spread = average_discharging_price - average_charging_price`
-- `efficiency_adjusted_spread = average_discharging_price * round_trip_efficiency - average_charging_price`
+- `gross_price_spread = average_discharging_price - average_charging_price` in dollars per MWh.
+- `efficiency_adjusted_spread = average_discharging_price * round_trip_efficiency - average_charging_price` in dollars per MWh charged.
 - `estimated_gross_margin_per_mwh_discharged = average_discharging_price - average_charging_price / round_trip_efficiency`
 - `energy_capacity_mwh = power_mw * duration_hours`
 - `discharged_energy_mwh = energy_capacity_mwh * cycles`
 - `charging_energy_required_mwh = discharged_energy_mwh / round_trip_efficiency`
 - `charging_cost = charging_energy_required_mwh * average_charging_price`
 - `discharge_revenue = discharged_energy_mwh * average_discharging_price`
-- `gross_arbitrage_margin = discharge_revenue - charging_cost`
-- `storage_lease_cost = discharged_energy_mwh * storage_fee_per_mwh`
-- `variable_operating_cost = discharged_energy_mwh * variable_om_per_mwh`
+- `gross_arbitrage_margin = discharge_revenue - charging_cost`; this is a dollar margin, not the price spread.
+- `storage_lease_cost = discharged_energy_mwh * storage_fee_per_mwh`; storage fees are charged on MWh discharged.
+- `variable_operating_cost = discharged_energy_mwh * variable_om_per_mwh`; variable O&M is charged on MWh discharged.
 - `estimated_net_margin = gross_arbitrage_margin - storage_lease_cost - variable_operating_cost`
 - `net_margin_per_mw = estimated_net_margin / power_mw`
 - `net_margin_per_mwh_discharged = estimated_net_margin / discharged_energy_mwh`
-- Prices are treated as dollars per MWh.
+- `cycles` scales discharged energy, charging energy, discharge revenue, charging cost, storage lease cost, and variable operating cost.
+- Prices are treated as dollars per MWh and can be negative when CAISO publishes negative LMPs.
 - This is an energy-price-only screen, not a full dispatch optimization.
 
 ## CAISO Data Limitations
