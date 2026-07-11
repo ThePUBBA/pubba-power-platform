@@ -50,6 +50,36 @@ def test_lmp_endpoint_returns_json_serializable_records(monkeypatch):
     assert response.json()[0]["lmp_prc"] == 22.42
 
 
+def test_lmp_endpoint_maps_invalid_input_to_400(monkeypatch):
+    import main
+
+    def mock_fetch_lmp_data(location, market, date):
+        raise ValueError("date must use ISO format YYYY-MM-DD")
+
+    monkeypatch.setattr(main, "fetch_lmp_data", mock_fetch_lmp_data)
+    client = TestClient(main.app)
+
+    response = client.get("/lmp", params={"date": "bad"})
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "date must use ISO format YYYY-MM-DD"}
+
+
+def test_lmp_endpoint_maps_caiso_errors_to_502(monkeypatch):
+    import main
+
+    def mock_fetch_lmp_data(location, market, date):
+        raise main.CaisoOasisError("CAISO OASIS request timed out")
+
+    monkeypatch.setattr(main, "fetch_lmp_data", mock_fetch_lmp_data)
+    client = TestClient(main.app)
+
+    response = client.get("/lmp")
+
+    assert response.status_code == 502
+    assert response.json() == {"detail": "CAISO OASIS request timed out"}
+
+
 def test_arbitrage_endpoint_returns_expected_analysis(monkeypatch):
     import main
 
