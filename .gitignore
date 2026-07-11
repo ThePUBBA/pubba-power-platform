@@ -1,8 +1,46 @@
+# System files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment and secrets
+.env
+.env.*
+*.env
+!.env.example
+*.pem
+*.key
+secrets/
+
+# Python environments and caches
 .venv/
+venv/
+env/
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Logs
 *.log
+logs/
 cron.log
+
+# Dependencies and build outputs
+node_modules/
+dist/
+build/
+coverage/
+.cache/
+
+# Local data and generated reports
 data/
 reports/latest/
 reports/archive/
@@ -11,5 +49,8 @@ reports/multi_node_*.html
 reports/last_run_summary.csv
 reports/history.csv
 backups/
-.env
-*.env
+
+# Temporary files
+tmp/
+temp/
+outputs/
