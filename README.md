@@ -1,10 +1,12 @@
 # Only1 LMP API
 
-FastAPI service for retrieving CAISO locational marginal price (LMP) data for Only1 Power workflows.
+FastAPI service for retrieving CAISO locational marginal price (LMP) data and identifying simple historical storage arbitrage opportunities for Only1 Power workflows.
 
 ## Overview
 
-This API exposes a simple HTTP interface for LMP lookups. It is intended to support market research, dispatch analysis, reporting, and downstream automation for energy storage and trading workflows.
+This API exposes HTTP endpoints for CAISO OASIS LMP lookups and a first-pass historical arbitrage analysis. It is intended to support market research, dispatch analysis, reporting, and downstream automation for energy storage workflows.
+
+The LMP implementation uses CAISO's official OASIS `SingleZip` endpoint with `queryname=PRC_INTVL_LMP`, `resultformat=6`, and CSV data returned inside a ZIP archive.
 
 ## Endpoints
 
@@ -20,23 +22,108 @@ Example response:
 
 ### `GET /lmp`
 
-Fetch LMP records for a market, location, and optional date.
+Fetch LMP records for a CAISO node, market run, and optional trade date.
 
 Query parameters:
 
 | Parameter | Default | Description |
 | --- | --- | --- |
-| `market` | `LMP` | CAISO market/product identifier. |
-| `location` | `TH_NP15_GEN-APND` | CAISO pricing node or location code. |
-| `date` | `null` | Optional date passed through to the CAISO fetch layer. |
+| `market` | `RTM` | CAISO market run ID. Supported values: `DAM`, `HASP`, `RTPD`, `RTM`. Legacy `LMP` is accepted as an alias for `RTM`. |
+| `location` | `TH_NP15_GEN-APND` | CAISO pricing node or location code passed as the OASIS `node` parameter. |
+| `date` | current Pacific date | Optional trade date in `YYYY-MM-DD` format. The API requests the full Pacific trade day. |
 
 Example:
 
 ```bash
-curl "http://localhost:8000/lmp?market=LMP&location=TH_NP15_GEN-APND"
+curl "http://localhost:8000/lmp?market=RTM&location=TH_NP15_GEN-APND&date=2025-04-01"
 ```
 
+### `GET /arbitrage`
+
+Fetch historical LMP data and estimate a simple buy-low / sell-high opportunity for an energy storage asset.
+
+Query parameters:
+
+| Parameter | Default | Description |
+| --- | --- | --- |
+| `market` | `RTM` | CAISO market run ID. |
+| `location` | `TH_NP15_GEN-APND` | CAISO pricing node or location code. |
+| `date` | current Pacific date | Trade date in `YYYY-MM-DD` format. |
+| `duration_hours` | `8` | Storage charge/discharge window length. Must be positive. |
+| `round_trip_efficiency` | `0.80` | Storage round-trip efficiency. Must be greater than `0` and less than or equal to `1`. |
+
+Example:
+
+```bash
+curl "http://localhost:8000/arbitrage?market=RTM&location=TH_NP15_GEN-APND&date=2025-04-01&duration_hours=8&round_trip_efficiency=0.80"
+```
+
+Sample response:
+
+```json
+{
+  "duration_hours": 8,
+  "round_trip_efficiency": 0.8,
+  "interval_hours": 1,
+  "intervals_per_window": 8,
+  "charging_window": {
+    "start_timestamp": "2025-04-01T00:00:00+00:00",
+    "end_timestamp": "2025-04-01T08:00:00+00:00",
+    "average_price": 20.0,
+    "prices": [
+      {"timestamp": "2025-04-01T00:00:00+00:00", "price": 18.0}
+    ]
+  },
+  "discharging_window": {
+    "start_timestamp": "2025-04-01T16:00:00+00:00",
+    "end_timestamp": "2025-04-02T00:00:00+00:00",
+    "average_price": 80.0,
+    "prices": [
+      {"timestamp": "2025-04-01T16:00:00+00:00", "price": 78.0}
+    ]
+  },
+  "average_charging_price": 20.0,
+  "average_discharging_price": 80.0,
+  "gross_price_spread": 60.0,
+  "efficiency_adjusted_spread": 44.0,
+  "estimated_gross_margin_per_mwh_discharged": 55.0
+}
+```
+
+## Formula Assumptions
+
+- The service selects the lowest average contiguous charging window and the highest average non-overlapping contiguous discharging window.
+- `gross_price_spread = average_discharging_price - average_charging_price`
+- `efficiency_adjusted_spread = average_discharging_price * round_trip_efficiency - average_charging_price`
+- `estimated_gross_margin_per_mwh_discharged = average_discharging_price - average_charging_price / round_trip_efficiency`
+- Prices are treated as dollars per MWh.
+- This is an energy-price-only screen, not a full dispatch optimization.
+
+## CAISO Data Limitations
+
+- OASIS can return no data for invalid nodes, unavailable trade dates, market outages, or delayed postings.
+- OASIS requests for large node groups are subject to tighter date-window limits. This API currently requests one explicit node at a time.
+- CAISO may return error XML or text inside the ZIP instead of a CSV. The API treats that as an upstream data error and returns HTTP `502`.
+- HTTP failures, timeouts, malformed ZIP files, malformed CSV files, and invalid timestamps are surfaced as structured FastAPI errors.
+- Date input is interpreted as a Pacific trade date, then sent to OASIS using UTC-formatted `startdatetime` and `enddatetime` values.
+
+## Arbitrage Limitations
+
+- No database.
+- No frontend.
+- No authentication.
+- No second ISO.
+- No live trading.
+- No battery degradation model.
+- No state-of-charge constraints beyond selecting non-overlapping charge and discharge windows.
+- No ancillary services, capacity, congestion hedging, demand charges, or operating costs.
+
 ## Local Development
+
+Supported Python versions:
+
+- Python 3.11
+- Python 3.12
 
 Create and activate a virtual environment:
 
@@ -45,10 +132,23 @@ python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-Install dependencies:
+Install production dependencies:
 
 ```bash
+python -m pip install --upgrade pip
 pip install -r requirements.txt
+```
+
+Install development and test dependencies:
+
+```bash
+pip install -r requirements-dev.txt
+```
+
+Run tests:
+
+```bash
+python -m pytest -q
 ```
 
 Run the API:
@@ -62,20 +162,6 @@ Open the interactive API docs at:
 ```text
 http://localhost:8000/docs
 ```
-
-## Project Structure
-
-```text
-.
-├── main.py              # FastAPI routes
-├── caiso.py             # CAISO data retrieval logic
-├── requirements.txt     # Python dependencies
-└── .gitignore           # Local files and generated artifacts to exclude
-```
-
-## Notes
-
-`main.py` expects `caiso.py` to provide `fetch_lmp_data(location, market, date)`, returning a pandas DataFrame. Keep fetch-layer assumptions documented as the CAISO integration evolves.
 
 ## License
 
