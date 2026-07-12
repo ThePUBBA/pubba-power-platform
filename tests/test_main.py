@@ -295,7 +295,11 @@ def test_post_simulate_returns_result_when_airtable_is_unavailable(
     monkeypatch.setattr(main, "airtable_is_configured", lambda: True)
 
     def fail(_result):
-        raise main.AirtableError("Airtable timed out")
+        raise main.AirtableError(
+            "Airtable record write failed: HTTP status=422; "
+            "error_type=UNKNOWN_FIELD_NAME; message=Unknown field name; "
+            'response_body={"error":{"type":"UNKNOWN_FIELD_NAME"}}'
+        )
 
     monkeypatch.setattr(main, "save_simulation_to_airtable", fail)
 
@@ -304,6 +308,9 @@ def test_post_simulate_returns_result_when_airtable_is_unavailable(
     assert response.status_code == 200
     assert response.json()["estimated_net_margin"] == 2570
     assert "Unable to archive simulation in Airtable" in caplog.text
+    assert "HTTP status=422" in caplog.text
+    assert "error_type=UNKNOWN_FIELD_NAME" in caplog.text
+    assert "response_body=" in caplog.text
 
 
 def test_post_simulate_rejects_invalid_request_body():

@@ -1,15 +1,16 @@
-import requests
+import json
 
 import airtable
 
 
 class MockResponse:
-    def __init__(self, error=None):
-        self.error = error
+    def __init__(self, status_code=200, payload=None, text=None):
+        self.status_code = status_code
+        self.payload = payload
+        self.text = text if text is not None else json.dumps(payload or {})
 
-    def raise_for_status(self):
-        if self.error:
-            raise self.error
+    def json(self):
+        return self.payload if self.payload is not None else {}
 
 
 def simulation_result():
@@ -64,6 +65,8 @@ def test_save_simulation_posts_expected_airtable_record(monkeypatch):
     )
     assert captured["headers"]["Authorization"] == "Bearer pat_test"
     assert captured["timeout"] == airtable.AIRTABLE_TIMEOUT_SECONDS
+    assert set(captured["json"]) == {"fields", "typecast"}
+    assert captured["json"]["typecast"] is True
     fields = captured["json"]["fields"]
     assert fields["location"] == "TH_NP15_GEN-APND"
     assert fields["estimated_net_margin"] == 2570
@@ -86,17 +89,78 @@ def test_save_simulation_does_nothing_without_complete_configuration(monkeypatch
     airtable.save_simulation_to_airtable(simulation_result())
 
 
-def test_save_simulation_wraps_airtable_request_errors(monkeypatch):
+def test_save_simulation_reports_unknown_airtable_field(monkeypatch):
     configure_airtable(monkeypatch)
+    payload = {
+        "error": {
+            "type": "UNKNOWN_FIELD_NAME",
+            "message": 'Unknown field name: "estimated_net_margin"',
+        }
+    }
     monkeypatch.setattr(
         airtable.requests,
         "post",
-        lambda *args, **kwargs: MockResponse(requests.HTTPError("503 unavailable")),
+        lambda *args, **kwargs: MockResponse(422, payload),
     )
 
     try:
         airtable.save_simulation_to_airtable(simulation_result())
     except airtable.AirtableError as exc:
-        assert "503 unavailable" in str(exc)
+        message = str(exc)
+        assert "HTTP status=422" in message
+        assert "error_type=UNKNOWN_FIELD_NAME" in message
+        assert 'Unknown field name: "estimated_net_margin"' in message
+        assert json.dumps(payload) in message
+        assert "pat_test" not in message
+    else:
+        raise AssertionError("Expected AirtableError")
+
+
+def test_save_simulation_reports_invalid_airtable_field_type(monkeypatch):
+    configure_airtable(monkeypatch)
+    payload = {
+        "error": {
+            "type": "INVALID_VALUE_FOR_COLUMN",
+            "message": 'Field "power_mw" cannot accept the provided value',
+        }
+    }
+    monkeypatch.setattr(
+        airtable.requests,
+        "post",
+        lambda *args, **kwargs: MockResponse(422, payload),
+    )
+
+    try:
+        airtable.save_simulation_to_airtable(simulation_result())
+    except airtable.AirtableError as exc:
+        message = str(exc)
+        assert "HTTP status=422" in message
+        assert "error_type=INVALID_VALUE_FOR_COLUMN" in message
+        assert 'Field "power_mw" cannot accept the provided value' in message
+        assert "response_body=" in message
+        assert "pat_test" not in message
+    else:
+        raise AssertionError("Expected AirtableError")
+
+
+def test_airtable_error_redacts_token_from_response(monkeypatch):
+    configure_airtable(monkeypatch)
+    payload = {
+        "error": {
+            "type": "INVALID_REQUEST",
+            "message": "Rejected token pat_test",
+        }
+    }
+    monkeypatch.setattr(
+        airtable.requests,
+        "post",
+        lambda *args, **kwargs: MockResponse(422, payload),
+    )
+
+    try:
+        airtable.save_simulation_to_airtable(simulation_result())
+    except airtable.AirtableError as exc:
+        assert "pat_test" not in str(exc)
+        assert "[REDACTED]" in str(exc)
     else:
         raise AssertionError("Expected AirtableError")
