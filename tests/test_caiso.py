@@ -157,6 +157,19 @@ def test_fetch_lmp_data_wraps_http_errors(monkeypatch):
         fetch_lmp_data(date="2025-04-01")
 
 
+def test_fetch_lmp_data_identifies_caiso_rate_limit(monkeypatch):
+    def mock_get(url, params, timeout):
+        return MockResponse(
+            b"rate limited",
+            requests.HTTPError("429 Client Error: Too Many Requests"),
+        )
+
+    monkeypatch.setattr(caiso.requests, "get", mock_get)
+
+    with pytest.raises(CaisoOasisError, match="429.*Too Many Requests"):
+        fetch_lmp_data(date="2025-04-01")
+
+
 def test_fetch_lmp_data_wraps_timeouts(monkeypatch):
     def mock_get(url, params, timeout):
         raise requests.Timeout("slow")

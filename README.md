@@ -385,6 +385,18 @@ Open the interactive API docs at:
 http://localhost:8000/docs
 ```
 
+## Production Verification Checklist
+
+- Confirm the deployed Git SHA matches the latest `main` commit and the working tree is clean before release.
+- Confirm Render uses Python 3.12 (matching `.python-version`), installs `requirements.txt`, and starts Uvicorn with `uvicorn main:app --host 0.0.0.0 --port $PORT` or an equivalent command.
+- Confirm Render defines `ALLOWED_ORIGINS`, `AIRTABLE_API_KEY`, `AIRTABLE_BASE_ID`, and `AIRTABLE_TABLE_NAME`. Keep the Airtable token in Render secrets, never in source control or Retool.
+- Confirm `GET /health` and `GET /` return HTTP 200 from the production URL.
+- Run a dated `POST /simulate` with a known CAISO node and confirm HTTP 200, plausible simulation output, and a corresponding new Airtable record containing all 16 documented fields.
+- Confirm Retool's REST resource base URL points to the current Render service and its simulation query sends JSON to `POST /simulate`.
+- Confirm Airtable field names exactly match the documented lowercase names and use appropriate date, number, currency, and text types.
+- Confirm CAISO rate limits return a structured 502 response identifying `CAISO OASIS`, while Airtable 403, 422, and timeout failures are logged without failing a completed simulation or exposing the token.
+- Confirm the latest GitHub Actions run passes on Python 3.11 and 3.12.
+
 ## License
 
 MIT License. See `LICENSE` for details.

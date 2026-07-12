@@ -1,6 +1,7 @@
 import json
 
 import airtable
+import requests
 
 
 class MockResponse:
@@ -116,6 +117,33 @@ def test_save_simulation_reports_unknown_airtable_field(monkeypatch):
         raise AssertionError("Expected AirtableError")
 
 
+def test_save_simulation_reports_airtable_403_without_exposing_token(monkeypatch):
+    configure_airtable(monkeypatch)
+    payload = {
+        "error": {
+            "type": "AUTHENTICATION_REQUIRED",
+            "message": "Invalid permissions, or the requested model was not found",
+        }
+    }
+    monkeypatch.setattr(
+        airtable.requests,
+        "post",
+        lambda *args, **kwargs: MockResponse(403, payload),
+    )
+
+    try:
+        airtable.save_simulation_to_airtable(simulation_result())
+    except airtable.AirtableError as exc:
+        message = str(exc)
+        assert "HTTP status=403" in message
+        assert "error_type=AUTHENTICATION_REQUIRED" in message
+        assert "Invalid permissions" in message
+        assert json.dumps(payload) in message
+        assert "pat_test" not in message
+    else:
+        raise AssertionError("Expected AirtableError")
+
+
 def test_save_simulation_reports_invalid_airtable_field_type(monkeypatch):
     configure_airtable(monkeypatch)
     payload = {
@@ -162,5 +190,28 @@ def test_airtable_error_redacts_token_from_response(monkeypatch):
     except airtable.AirtableError as exc:
         assert "pat_test" not in str(exc)
         assert "[REDACTED]" in str(exc)
+    else:
+        raise AssertionError("Expected AirtableError")
+
+
+def test_save_simulation_reports_airtable_timeout_without_exposing_token(monkeypatch):
+    configure_airtable(monkeypatch)
+    monkeypatch.setattr(
+        airtable.requests,
+        "post",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            requests.Timeout("request using pat_test timed out")
+        ),
+    )
+
+    try:
+        airtable.save_simulation_to_airtable(simulation_result())
+    except airtable.AirtableError as exc:
+        message = str(exc)
+        assert "HTTP status=unavailable" in message
+        assert "error_type=request_error" in message
+        assert "timed out" in message
+        assert "pat_test" not in message
+        assert "[REDACTED]" in message
     else:
         raise AssertionError("Expected AirtableError")
