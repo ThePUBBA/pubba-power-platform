@@ -151,6 +151,7 @@ def _raise_oasis_message_error(archive: zipfile.ZipFile) -> None:
 def _normalize_lmp_frame(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df.columns = [_normalize_column_name(column) for column in df.columns]
+    df = _select_lmp_price_rows(df)
 
     for column in ("interval_start_gmt", "interval_end_gmt"):
         if column in df.columns:
@@ -162,6 +163,9 @@ def _normalize_lmp_frame(df: pd.DataFrame) -> pd.DataFrame:
             df[column] = values.dt.tz_convert(PACIFIC_TZ).dt.strftime(
                 "%Y-%m-%dT%H:%M:%S%z"
             )
+
+    if "interval_start_gmt" in df.columns:
+        df["timestamp"] = df["interval_start_gmt"]
 
     numeric_columns = (
         "opr_hr",
@@ -178,6 +182,28 @@ def _normalize_lmp_frame(df: pd.DataFrame) -> pd.DataFrame:
             df[column] = pd.to_numeric(df[column], errors="coerce")
 
     return df.where(pd.notna(df), None)
+
+
+def _select_lmp_price_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize CAISO's long-form price components to the total LMP price."""
+
+    if "xml_data_item" in df.columns:
+        data_items = df["xml_data_item"].astype("string").str.strip().str.upper()
+        df = df.loc[data_items == "LMP_PRC"].copy()
+        if df.empty:
+            raise CaisoOasisError(
+                "CAISO OASIS response did not include XML_DATA_ITEM=LMP_PRC rows"
+            )
+
+    if "lmp_prc" not in df.columns and "value" in df.columns:
+        df["lmp_prc"] = df["value"]
+
+    if "lmp_prc" not in df.columns:
+        raise CaisoOasisError(
+            "CAISO OASIS response did not include an LMP price column"
+        )
+
+    return df
 
 
 def _normalize_column_name(column: str) -> str:

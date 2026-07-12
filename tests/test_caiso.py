@@ -64,7 +64,54 @@ def test_fetch_lmp_data_uses_oasis_and_returns_normalized_dataframe(monkeypatch)
     record = df.to_dict(orient="records")[0]
     assert record["interval_start_gmt"] == "2025-04-01T00:00:00-0700"
     assert record["interval_end_gmt"] == "2025-04-01T00:05:00-0700"
+    assert record["timestamp"] == "2025-04-01T00:00:00-0700"
     assert record["lmp_prc"] == 22.42
+
+
+def test_fetch_lmp_data_normalizes_live_long_form_caiso_columns(monkeypatch):
+    csv = "\n".join(
+        [
+            "INTERVALSTARTTIME_GMT,INTERVALENDTIME_GMT,OPR_DT,OPR_HR,NODE_ID_XML,NODE_ID,NODE,MARKET_RUN_ID,LMP_TYPE,XML_DATA_ITEM,PNODE_RESMRID,GRP_TYPE,POS,VALUE,OPR_INTERVAL,GROUP",
+            "2025-07-18T07:00:00-00:00,2025-07-18T07:05:00-00:00,2025-07-18,01,TH_NP15_GEN-APND,TH_NP15_GEN-APND,TH_NP15_GEN-APND,RTM,MCC,LMP_CONG_PRC,TH_NP15_GEN-APND,ALL_APNODES,0,-1.68082,1,1",
+            "2025-07-18T07:00:00-00:00,2025-07-18T07:05:00-00:00,2025-07-18,01,TH_NP15_GEN-APND,TH_NP15_GEN-APND,TH_NP15_GEN-APND,RTM,MCE,LMP_ENE_PRC,TH_NP15_GEN-APND,ALL_APNODES,0,48.94640,1,2",
+            "2025-07-18T07:00:00-00:00,2025-07-18T07:05:00-00:00,2025-07-18,01,TH_NP15_GEN-APND,TH_NP15_GEN-APND,TH_NP15_GEN-APND,RTM,LMP,LMP_PRC,TH_NP15_GEN-APND,ALL_APNODES,0,50.48609,1,5",
+        ]
+    )
+
+    monkeypatch.setattr(
+        caiso.requests,
+        "get",
+        lambda url, params, timeout: MockResponse(zipped_file("live_lmp.csv", csv)),
+    )
+
+    df = fetch_lmp_data(
+        location="TH_NP15_GEN-APND",
+        market="RTM",
+        date="2025-07-18",
+    )
+
+    assert len(df) == 1
+    record = df.to_dict(orient="records")[0]
+    assert record["xml_data_item"] == "LMP_PRC"
+    assert record["lmp_type"] == "LMP"
+    assert record["timestamp"] == "2025-07-18T00:00:00-0700"
+    assert record["lmp_prc"] == 50.48609
+
+
+def test_normalization_handles_column_names_case_insensitively():
+    df = pd.DataFrame(
+        {
+            "IntervalStartTime_GMT": ["2025-07-18T07:00:00-00:00"],
+            "IntervalEndTime_GMT": ["2025-07-18T07:05:00-00:00"],
+            "Xml_Data_Item": ["lmp_prc"],
+            "Value": ["50.48609"],
+        }
+    )
+
+    normalized = caiso._normalize_lmp_frame(df)
+
+    assert normalized.iloc[0]["lmp_prc"] == 50.48609
+    assert normalized.iloc[0]["timestamp"] == "2025-07-18T00:00:00-0700"
 
 
 def test_fetch_lmp_data_keeps_legacy_lmp_market_alias(monkeypatch):
