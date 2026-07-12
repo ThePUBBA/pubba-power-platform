@@ -253,6 +253,59 @@ def test_post_simulate_returns_expected_profit(monkeypatch):
     assert response.json()["estimated_net_margin"] == 2570
 
 
+def test_post_simulate_archives_to_airtable_when_configured(monkeypatch):
+    import main
+
+    monkeypatch.setattr(
+        main,
+        "fetch_lmp_data",
+        lambda location, market, date: make_lmp_frame(
+            [100, 90, 20, 10, 12, 18, 50, 60, 80, 100, 95, 85]
+        ),
+    )
+    monkeypatch.setattr(main, "airtable_is_configured", lambda: True)
+    archived = {}
+    monkeypatch.setattr(
+        main,
+        "save_simulation_to_airtable",
+        lambda result: archived.update(result),
+    )
+
+    response = TestClient(main.app).post("/simulate", json=simulation_payload())
+
+    assert response.status_code == 200
+    assert archived["location"] == "TH_NP15_GEN-APND"
+    assert archived["market"] == "RTM"
+    assert archived["date"] == "2025-04-01"
+    assert archived["estimated_net_margin"] == 2570
+
+
+def test_post_simulate_returns_result_when_airtable_is_unavailable(
+    monkeypatch, caplog
+):
+    import main
+
+    monkeypatch.setattr(
+        main,
+        "fetch_lmp_data",
+        lambda location, market, date: make_lmp_frame(
+            [100, 90, 20, 10, 12, 18, 50, 60, 80, 100, 95, 85]
+        ),
+    )
+    monkeypatch.setattr(main, "airtable_is_configured", lambda: True)
+
+    def fail(_result):
+        raise main.AirtableError("Airtable timed out")
+
+    monkeypatch.setattr(main, "save_simulation_to_airtable", fail)
+
+    response = TestClient(main.app).post("/simulate", json=simulation_payload())
+
+    assert response.status_code == 200
+    assert response.json()["estimated_net_margin"] == 2570
+    assert "Unable to archive simulation in Airtable" in caplog.text
+
+
 def test_post_simulate_rejects_invalid_request_body():
     import main
 
