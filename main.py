@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import logging
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -12,12 +13,14 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from arbitrage import ArbitrageAnalysisError, analyze_lmp_arbitrage
+from airtable import AirtableError, airtable_is_configured, save_simulation_to_airtable
 from caiso import CaisoOasisError, fetch_lmp_data
 from simulation import StorageSimulationError, simulate_storage_profit
 
 
 SERVICE_NAME = "Only1 LMP API"
 API_VERSION = "1.0.0"
+logger = logging.getLogger(__name__)
 
 
 class PricePoint(BaseModel):
@@ -276,7 +279,19 @@ def create_app() -> FastAPI:
 
     @app.post("/simulate", response_model=SimulationResponse)
     def post_simulation(request: SimulationRequest):
-        return _run_simulation(request)
+        result = _run_simulation(request)
+        if airtable_is_configured():
+            airtable_result = {
+                **result,
+                "location": request.location,
+                "market": request.market,
+                "date": request.date,
+            }
+            try:
+                save_simulation_to_airtable(airtable_result)
+            except AirtableError:
+                logger.exception("Unable to archive simulation in Airtable")
+        return result
 
     return app
 

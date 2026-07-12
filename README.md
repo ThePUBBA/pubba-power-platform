@@ -249,6 +249,41 @@ ALLOWED_ORIGINS=https://your-org.retool.com,https://dashboard.only1power.com
 
 Copy `.env.example` as a deployment reference, but configure the actual value through the hosting provider. Origins must include the scheme and must not include a trailing path. Never put secrets in `.env.example` or commit a populated `.env` file.
 
+## Optional Airtable Simulation Archive
+
+Successful `POST /simulate` requests can create one Airtable record for reporting and historical analysis. Airtable is optional: when its configuration is missing, no write is attempted. If a configured Airtable request fails, the API logs the error and still returns the completed simulation response.
+
+Create an Airtable personal access token with `data.records:write` scope and access to the target base, then configure these deployment environment variables:
+
+```bash
+AIRTABLE_API_KEY=pat_your_personal_access_token
+AIRTABLE_BASE_ID=app_your_base_id
+AIRTABLE_TABLE_NAME=Simulation Archive
+```
+
+The target table must contain fields matching these names:
+
+- `timestamp`
+- `location`
+- `market`
+- `date`
+- `power_mw`
+- `duration_hours`
+- `round_trip_efficiency`
+- `cycles`
+- `charging_cost`
+- `discharge_revenue`
+- `gross_arbitrage_margin`
+- `estimated_net_margin`
+- `charging_window_start`
+- `charging_window_end`
+- `discharging_window_start`
+- `discharging_window_end`
+
+Use date/time-compatible Airtable fields for `timestamp` and the four window fields, numeric fields for power, duration, efficiency, cycles, costs, revenue, and margins, and text or select fields for location and market. The table name is URL-encoded by the service, so spaces are supported.
+
+Keep the personal access token in the deployment provider's secret manager. Do not expose it in Retool, commit it to Git, or add it to `.env.example`.
+
 ## OpenAPI Documentation
 
 With the API running, use interactive Swagger documentation at `http://localhost:8000/docs` or the raw OpenAPI schema at `http://localhost:8000/openapi.json`. The POST request model, response schema, constraints, and health response are published there and can be used to verify Retool payloads.
