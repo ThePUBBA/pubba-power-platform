@@ -261,26 +261,30 @@ AIRTABLE_BASE_ID=app_your_base_id
 AIRTABLE_TABLE_NAME=Simulation Archive
 ```
 
-The target table must contain fields matching these names:
+The target table must contain all 16 field names below exactly as written. Airtable field names are case-sensitive for API writes.
 
-- `timestamp`
-- `location`
-- `market`
-- `date`
-- `power_mw`
-- `duration_hours`
-- `round_trip_efficiency`
-- `cycles`
-- `charging_cost`
-- `discharge_revenue`
-- `gross_arbitrage_margin`
-- `estimated_net_margin`
-- `charging_window_start`
-- `charging_window_end`
-- `discharging_window_start`
-- `discharging_window_end`
+| Exact Airtable field | Recommended Airtable type |
+| --- | --- |
+| `timestamp` | Date, with time enabled |
+| `location` | Single line text |
+| `market` | Single line text |
+| `date` | Date |
+| `power_mw` | Number |
+| `duration_hours` | Number |
+| `round_trip_efficiency` | Number or Percent |
+| `cycles` | Number |
+| `charging_cost` | Currency or Number |
+| `discharge_revenue` | Currency or Number |
+| `gross_arbitrage_margin` | Currency or Number |
+| `estimated_net_margin` | Currency or Number |
+| `charging_window_start` | Date, with time enabled |
+| `charging_window_end` | Date, with time enabled |
+| `discharging_window_start` | Date, with time enabled |
+| `discharging_window_end` | Date, with time enabled |
 
-Use date/time-compatible Airtable fields for `timestamp` and the four window fields, numeric fields for power, duration, efficiency, cycles, costs, revenue, and margins, and text or select fields for location and market. The table name is URL-encoded by the service, so spaces are supported.
+The create-record request uses `{"fields": { ... }, "typecast": true}`. Typecasting lets Airtable perform best-effort conversion for compatible field types, but it does not create missing fields or correct differently named fields. A 422 response now logs the HTTP status, Airtable response body, Airtable error type, and Airtable error message without logging the API token.
+
+The table name is URL-encoded by the service, so spaces such as `Simulation Results` are supported.
 
 Keep the personal access token in the deployment provider's secret manager. Do not expose it in Retool, commit it to Git, or add it to `.env.example`.
 
