@@ -379,6 +379,28 @@ def test_post_simulate_maps_caiso_failure_to_structured_error(monkeypatch):
     assert response.json()["upstream_service"] == "CAISO OASIS"
 
 
+def test_post_simulate_maps_caiso_429_to_structured_upstream_error(monkeypatch):
+    import main
+
+    def fail(location, market, date):
+        raise main.CaisoOasisError(
+            "CAISO OASIS request failed: 429 Client Error: Too Many Requests"
+        )
+
+    monkeypatch.setattr(main, "fetch_lmp_data", fail)
+    response = TestClient(main.app).post("/simulate", json=simulation_payload())
+
+    assert response.status_code == 502
+    assert response.json() == {
+        "error_code": "upstream_service_error",
+        "message": (
+            "CAISO OASIS request failed: "
+            "429 Client Error: Too Many Requests"
+        ),
+        "upstream_service": "CAISO OASIS",
+    }
+
+
 def test_health_endpoint_returns_service_metadata():
     import main
 
