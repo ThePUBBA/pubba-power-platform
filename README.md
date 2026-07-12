@@ -90,7 +90,69 @@ Sample response:
 }
 ```
 
-### `GET /simulate`
+### `POST /simulate` (Retool)
+
+Run a storage simulation from a JSON request. This is the preferred endpoint for the Only1 Power Retool dashboard. It calls the same simulation and arbitrage functions as the legacy GET endpoint.
+
+```bash
+curl -X POST "http://localhost:8000/simulate" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "location": "TH_NP15_GEN-APND",
+    "market": "RTM",
+    "date": "2025-04-01",
+    "power_mw": 10,
+    "duration_hours": 4,
+    "round_trip_efficiency": 0.8,
+    "cycles": 2,
+    "storage_fee_per_mwh": 5,
+    "variable_om_per_mwh": 2
+  }'
+```
+
+Sample response:
+
+```json
+{
+  "power_mw": 10,
+  "duration_hours": 4,
+  "round_trip_efficiency": 0.8,
+  "cycles": 2,
+  "storage_fee_per_mwh": 5,
+  "variable_om_per_mwh": 2,
+  "energy_capacity_mwh": 40,
+  "charging_energy_required_mwh": 100,
+  "discharged_energy_mwh": 80,
+  "charging_cost": 1500,
+  "discharge_revenue": 7200,
+  "gross_arbitrage_margin": 5700,
+  "storage_lease_cost": 400,
+  "variable_operating_cost": 160,
+  "estimated_net_margin": 5140,
+  "net_margin_per_mw": 514,
+  "net_margin_per_mwh_discharged": 64.25,
+  "arbitrage": {"duration_hours": 4, "round_trip_efficiency": 0.8},
+  "charging_window": {"start_timestamp": "2025-04-01T02:00:00+00:00", "end_timestamp": "2025-04-01T06:00:00+00:00", "average_price": 15, "prices": []},
+  "discharging_window": {"start_timestamp": "2025-04-01T08:00:00+00:00", "end_timestamp": "2025-04-01T12:00:00+00:00", "average_price": 90, "prices": []},
+  "assumptions": {}
+}
+```
+
+The live response includes the complete nested `arbitrage`, window price points, and formula assumptions. Pydantic request validation requires positive power, duration, efficiency, and cycles; efficiency cannot exceed `1`; and per-MWh fees cannot be negative.
+
+Validation and upstream failures use a stable JSON envelope:
+
+```json
+{
+  "error_code": "validation_error",
+  "message": "Input should be greater than 0",
+  "field": "power_mw"
+}
+```
+
+CAISO failures include `"upstream_service": "CAISO OASIS"`.
+
+### `GET /simulate` (backward compatible)
 
 Fetch historical LMP data, reuse the arbitrage window selection, and estimate dollar revenue for a leased storage asset. This is a historical simulation using posted LMPs; it is not a forecast, live dispatch signal, or trading recommendation.
 
@@ -149,6 +211,54 @@ Sample response:
 ```
 
 Returned price fields are dollars per MWh. Returned margin, revenue, cost, and fee fields are dollars unless the field name explicitly says `per_mw` or `per_mwh`.
+
+### `GET /health`
+
+Use this endpoint for uptime checks and Retool resource validation.
+
+```bash
+curl "http://localhost:8000/health"
+```
+
+```json
+{
+  "status": "ok",
+  "service_name": "Only1 LMP API",
+  "api_version": "1.0.0",
+  "current_utc_timestamp": "2026-07-12T20:00:00Z"
+}
+```
+
+## Retool REST API Resource Setup
+
+1. In Retool, create a REST API resource and set its base URL to the deployed API URL, without an endpoint path.
+2. Do not add authentication headers; this API does not currently implement authentication.
+3. Test the resource with `GET /health`.
+4. Create a POST query for `/simulate`, select a JSON body, and map Retool component values to the request fields shown above.
+5. Display successful query data directly; for failures, read `error_code`, `message`, and `field` or `upstream_service` from the response body.
+
+For browser-based Retool requests, add the exact Retool origin to `ALLOWED_ORIGINS` in the API deployment environment. Retool-hosted origins commonly follow `https://YOUR-ORG.retool.com`; custom Retool domains must be listed explicitly.
+
+## CORS Configuration
+
+`ALLOWED_ORIGINS` is a comma-separated allowlist. It has no wildcard default and CORS middleware is disabled when the variable is empty.
+
+```bash
+ALLOWED_ORIGINS=https://your-org.retool.com,https://dashboard.only1power.com
+```
+
+Copy `.env.example` as a deployment reference, but configure the actual value through the hosting provider. Origins must include the scheme and must not include a trailing path. Never put secrets in `.env.example` or commit a populated `.env` file.
+
+## OpenAPI Documentation
+
+With the API running, use interactive Swagger documentation at `http://localhost:8000/docs` or the raw OpenAPI schema at `http://localhost:8000/openapi.json`. The POST request model, response schema, constraints, and health response are published there and can be used to verify Retool payloads.
+
+## Security Notes
+
+- CORS restricts browser origins; it is not authentication or authorization.
+- This API is intentionally unauthenticated. Deploy it behind an appropriate private network, gateway, or access control before exposing sensitive workflows publicly.
+- Do not place secrets, API keys, credentials, or Retool tokens in request bodies, source control, `.env.example`, or client-side Retool JavaScript.
+- Treat simulation output as historical analysis, not a live dispatch or trading instruction.
 
 ## Formula Assumptions
 
