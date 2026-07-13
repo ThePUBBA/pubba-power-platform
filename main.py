@@ -13,7 +13,16 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from arbitrage import ArbitrageAnalysisError, analyze_lmp_arbitrage
-from airtable import AirtableError, airtable_is_configured, save_simulation_to_airtable
+from airtable import (
+    AirtableError,
+    airtable_is_configured,
+    create_dispatch_event,
+    find_asset_by_asset_id,
+    find_or_create_daily_pnl,
+    get_portfolio_summary,
+    save_simulation_to_airtable,
+    update_daily_pnl_totals,
+)
 from caiso import CaisoOasisError, fetch_lmp_data
 from simulation import StorageSimulationError, simulate_storage_profit
 
@@ -60,6 +69,7 @@ class SimulationRequest(BaseModel):
     cycles: float = Field(default=1, gt=0)
     storage_fee_per_mwh: float = Field(default=0, ge=0)
     variable_om_per_mwh: float = Field(default=0, ge=0)
+    asset_id: Optional[str] = None
 
 
 class SimulationResponse(BaseModel):
@@ -91,6 +101,17 @@ class HealthResponse(BaseModel):
     service_name: str
     api_version: str
     current_utc_timestamp: datetime
+
+
+class PortfolioSummaryResponse(BaseModel):
+    total_assets: int
+    active_assets: int
+    total_simulations: int
+    total_dispatches: int
+    cumulative_revenue: float
+    cumulative_charging_cost: float
+    cumulative_storage_cost: float
+    cumulative_net_profit: float
 
 
 class ApiError(Exception):
@@ -161,6 +182,58 @@ def _run_simulation(request: SimulationRequest) -> dict:
         raise ApiError(400, "simulation_error", str(exc), field=field) from exc
 
 
+def _archive_simulation(request: SimulationRequest, result: dict) -> None:
+    airtable_result = {
+        **result,
+        "location": request.location,
+        "market": request.market,
+        "date": request.date,
+    }
+    simulation_record_id = None
+    try:
+        simulation_record_id = save_simulation_to_airtable(airtable_result)
+    except AirtableError:
+        logger.exception(
+            "Airtable operation failed",
+            extra={"airtable_operation": "archive_simulation"},
+        )
+
+    if not request.asset_id:
+        return
+    try:
+        asset = find_asset_by_asset_id(request.asset_id)
+    except AirtableError:
+        logger.exception(
+            "Airtable operation failed",
+            extra={"airtable_operation": "find_asset", "asset_id": request.asset_id},
+        )
+        return
+    if not asset:
+        logger.warning(
+            "Airtable asset not found; skipping portfolio ledger updates",
+            extra={"airtable_operation": "find_asset", "asset_id": request.asset_id},
+        )
+        return
+
+    try:
+        create_dispatch_event(asset, airtable_result, simulation_record_id)
+    except AirtableError:
+        logger.exception(
+            "Airtable operation failed",
+            extra={"airtable_operation": "create_dispatch", "asset_id": request.asset_id},
+        )
+
+    pnl_date = request.date or datetime.now(timezone.utc).date().isoformat()
+    try:
+        daily_record = find_or_create_daily_pnl(pnl_date)
+        update_daily_pnl_totals(daily_record, airtable_result)
+    except AirtableError:
+        logger.exception(
+            "Airtable operation failed",
+            extra={"airtable_operation": "update_daily_pnl", "asset_id": request.asset_id},
+        )
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title=SERVICE_NAME, version=API_VERSION)
     origins = _allowed_origins()
@@ -214,6 +287,18 @@ def create_app() -> FastAPI:
             "api_version": API_VERSION,
             "current_utc_timestamp": datetime.now(timezone.utc),
         }
+
+    @app.get("/portfolio/summary", response_model=PortfolioSummaryResponse)
+    def portfolio_summary():
+        try:
+            return get_portfolio_summary()
+        except AirtableError as exc:
+            raise ApiError(
+                502,
+                "upstream_service_error",
+                str(exc),
+                upstream_service="Airtable",
+            ) from exc
 
     @app.get("/lmp")
     def get_lmp(
@@ -281,16 +366,7 @@ def create_app() -> FastAPI:
     def post_simulation(request: SimulationRequest):
         result = _run_simulation(request)
         if airtable_is_configured():
-            airtable_result = {
-                **result,
-                "location": request.location,
-                "market": request.market,
-                "date": request.date,
-            }
-            try:
-                save_simulation_to_airtable(airtable_result)
-            except AirtableError:
-                logger.exception("Unable to archive simulation in Airtable")
+            _archive_simulation(request, result)
         return result
 
     return app

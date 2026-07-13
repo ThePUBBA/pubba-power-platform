@@ -258,8 +258,14 @@ Create an Airtable personal access token with `data.records:write` scope and acc
 ```bash
 AIRTABLE_API_KEY=pat_your_personal_access_token
 AIRTABLE_BASE_ID=app_your_base_id
-AIRTABLE_TABLE_NAME=Simulation Archive
+AIRTABLE_SIMULATIONS_TABLE=Simulation Results
+AIRTABLE_ASSETS_TABLE=Assets
+AIRTABLE_DISPATCH_EVENTS_TABLE=Dispatch Events
+AIRTABLE_DAILY_PNL_TABLE=Daily P&L
+AIRTABLE_ASSET_SUMMARY_TABLE=Asset Summary
 ```
+
+`AIRTABLE_TABLE_NAME` remains supported as a legacy fallback for `AIRTABLE_SIMULATIONS_TABLE`. The five new variables default to the exact table names shown above, but explicitly setting them is recommended for production.
 
 The target table must contain all 16 field names below exactly as written. Airtable field names are case-sensitive for API writes.
 
@@ -285,6 +291,67 @@ The target table must contain all 16 field names below exactly as written. Airta
 The create-record request uses `{"fields": { ... }, "typecast": true}`. Typecasting lets Airtable perform best-effort conversion for compatible field types, but it does not create missing fields or correct differently named fields. A 422 response now logs the HTTP status, Airtable response body, Airtable error type, and Airtable error message without logging the API token.
 
 The table name is URL-encoded by the service, so spaces such as `Simulation Results` are supported.
+
+### Portfolio table fields
+
+The portfolio ledger expects these exact, case-sensitive fields:
+
+| Table | Required fields |
+| --- | --- |
+| `Simulation Results` | `timestamp`, `location`, `market`, `date`, `power_mw`, `duration_hours`, `round_trip_efficiency`, `cycles`, `charging_cost`, `discharge_revenue`, `gross_arbitrage_margin`, `estimated_net_margin`, `charging_window_start`, `charging_window_end`, `discharging_window_start`, `discharging_window_end` |
+| `Assets` | `asset_id`, `asset_name`, `technology`, `power_mw`, `energy_mwh`, `duration_hours`, `location`, `lease_cost_monthly`, `status` |
+| `Dispatch Events` | `dispatch_id`, `asset_id`, `simulation`, `charge_start`, `charge_end`, `discharge_start`, `discharge_end`, `charging_cost`, `discharge_revenue`, `estimated_profit` |
+| `Daily P&L` | `date`, `gross_revenue`, `charging_cost`, `storage_cost`, `net_profit` |
+| `Asset Summary` | `asset_id`, `asset_name`, `total_simulations`, `total_revenue`, `total_charging_cost`, `total_profit`, `average_profit`, `utilization_percent` |
+
+For the current text-based tables, `Dispatch Events.asset_id` stores the matching business asset ID and `Dispatch Events.simulation` stores the Airtable record ID returned by the Simulation Results write. For stronger Airtable-native relationships, configure these as linked-record fields to `Assets` and `Simulation Results` and update the values to linked-record arrays. Use Number/Currency types for financial and capacity fields and Date types for date/time fields so Airtable can aggregate and sort them correctly.
+
+### Simulation-to-dispatch flow
+
+`POST /simulate` accepts an optional `asset_id`. Every successful simulation is archived to `Simulation Results` when Airtable is configured. When `asset_id` is present, the API looks up that exact ID in `Assets`; it never creates an asset automatically. If found, the API creates a Dispatch Events record, includes the simulation record ID when available, finds or creates the matching Daily P&L date, and increments:
+
+- `gross_revenue` by `discharge_revenue`
+- `charging_cost` by the simulation charging cost
+- `storage_cost` by `storage_lease_cost + variable_operating_cost`
+- `net_profit` by `estimated_net_margin`
+
+Each Airtable step is failure-tolerant. A partial Airtable outage is logged with the operation name and redacted error details, while the completed simulation still returns normally. No Dispatch Events record is created when `asset_id` is omitted or not found.
+
+Example request with an asset link:
+
+```json
+{
+  "location": "TH_NP15_GEN-APND",
+  "market": "RTM",
+  "date": "2025-07-18",
+  "power_mw": 10,
+  "duration_hours": 4,
+  "round_trip_efficiency": 0.85,
+  "cycles": 1,
+  "storage_fee_per_mwh": 5,
+  "variable_om_per_mwh": 2,
+  "asset_id": "BAT-001"
+}
+```
+
+### `GET /portfolio/summary`
+
+Returns portfolio-wide counts from Assets, Simulation Results, and Dispatch Events, plus cumulative totals from Daily P&L:
+
+```json
+{
+  "total_assets": 3,
+  "active_assets": 2,
+  "total_simulations": 12,
+  "total_dispatches": 8,
+  "cumulative_revenue": 10000,
+  "cumulative_charging_cost": 4000,
+  "cumulative_storage_cost": 1000,
+  "cumulative_net_profit": 5000
+}
+```
+
+The endpoint returns a structured `502` identifying Airtable if summary data cannot be retrieved.
 
 Keep the personal access token in the deployment provider's secret manager. Do not expose it in Retool, commit it to Git, or add it to `.env.example`.
 

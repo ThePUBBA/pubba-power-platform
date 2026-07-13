@@ -280,6 +280,98 @@ def test_post_simulate_archives_to_airtable_when_configured(monkeypatch):
     assert archived["estimated_net_margin"] == 2570
 
 
+def test_post_simulate_without_asset_id_does_not_create_dispatch(monkeypatch):
+    import main
+
+    monkeypatch.setattr(
+        main,
+        "fetch_lmp_data",
+        lambda location, market, date: make_lmp_frame(
+            [100, 90, 20, 10, 12, 18, 50, 60, 80, 100, 95, 85]
+        ),
+    )
+    monkeypatch.setattr(main, "airtable_is_configured", lambda: True)
+    monkeypatch.setattr(main, "save_simulation_to_airtable", lambda result: "recSim")
+    monkeypatch.setattr(
+        main,
+        "find_asset_by_asset_id",
+        lambda asset_id: (_ for _ in ()).throw(AssertionError("unexpected lookup")),
+    )
+
+    response = TestClient(main.app).post("/simulate", json=simulation_payload())
+
+    assert response.status_code == 200
+
+
+def test_post_simulate_skips_dispatch_for_missing_asset(monkeypatch):
+    import main
+
+    monkeypatch.setattr(
+        main,
+        "fetch_lmp_data",
+        lambda location, market, date: make_lmp_frame(
+            [100, 90, 20, 10, 12, 18, 50, 60, 80, 100, 95, 85]
+        ),
+    )
+    monkeypatch.setattr(main, "airtable_is_configured", lambda: True)
+    monkeypatch.setattr(main, "save_simulation_to_airtable", lambda result: "recSim")
+    monkeypatch.setattr(main, "find_asset_by_asset_id", lambda asset_id: None)
+    monkeypatch.setattr(
+        main,
+        "create_dispatch_event",
+        lambda *args: (_ for _ in ()).throw(AssertionError("unexpected dispatch")),
+    )
+
+    response = TestClient(main.app).post(
+        "/simulate", json=simulation_payload(asset_id="MISSING")
+    )
+
+    assert response.status_code == 200
+
+
+def test_post_simulate_continues_daily_pnl_after_dispatch_failure(monkeypatch):
+    import main
+
+    monkeypatch.setattr(
+        main,
+        "fetch_lmp_data",
+        lambda location, market, date: make_lmp_frame(
+            [100, 90, 20, 10, 12, 18, 50, 60, 80, 100, 95, 85]
+        ),
+    )
+    monkeypatch.setattr(main, "airtable_is_configured", lambda: True)
+    monkeypatch.setattr(main, "save_simulation_to_airtable", lambda result: "recSim")
+    monkeypatch.setattr(
+        main,
+        "find_asset_by_asset_id",
+        lambda asset_id: {"id": "recAsset", "fields": {"asset_id": asset_id}},
+    )
+    monkeypatch.setattr(
+        main,
+        "create_dispatch_event",
+        lambda *args: (_ for _ in ()).throw(main.AirtableError("dispatch unavailable")),
+    )
+    monkeypatch.setattr(
+        main,
+        "find_or_create_daily_pnl",
+        lambda date: {"id": "recDaily", "fields": {"date": date}},
+    )
+    updated = {}
+    monkeypatch.setattr(
+        main,
+        "update_daily_pnl_totals",
+        lambda record, result: updated.update(record=record, result=result),
+    )
+
+    response = TestClient(main.app).post(
+        "/simulate", json=simulation_payload(asset_id="BAT-001")
+    )
+
+    assert response.status_code == 200
+    assert updated["record"]["id"] == "recDaily"
+    assert updated["result"]["estimated_net_margin"] == 2570
+
+
 def test_post_simulate_returns_result_when_airtable_is_unavailable(
     monkeypatch, caplog
 ):
@@ -307,7 +399,7 @@ def test_post_simulate_returns_result_when_airtable_is_unavailable(
 
     assert response.status_code == 200
     assert response.json()["estimated_net_margin"] == 2570
-    assert "Unable to archive simulation in Airtable" in caplog.text
+    assert "Airtable operation failed" in caplog.text
     assert "HTTP status=422" in caplog.text
     assert "error_type=UNKNOWN_FIELD_NAME" in caplog.text
     assert "response_body=" in caplog.text
@@ -412,6 +504,31 @@ def test_health_endpoint_returns_service_metadata():
     assert body["service_name"] == "Only1 LMP API"
     assert body["api_version"] == "1.0.0"
     assert body["current_utc_timestamp"].endswith(("Z", "+00:00"))
+
+
+def test_portfolio_summary_endpoint_returns_airtable_metrics(monkeypatch):
+    import main
+
+    monkeypatch.setattr(
+        main,
+        "get_portfolio_summary",
+        lambda: {
+            "total_assets": 3,
+            "active_assets": 2,
+            "total_simulations": 12,
+            "total_dispatches": 8,
+            "cumulative_revenue": 10000,
+            "cumulative_charging_cost": 4000,
+            "cumulative_storage_cost": 1000,
+            "cumulative_net_profit": 5000,
+        },
+    )
+
+    response = TestClient(main.app).get("/portfolio/summary")
+
+    assert response.status_code == 200
+    assert response.json()["total_assets"] == 3
+    assert response.json()["cumulative_net_profit"] == 5000
 
 
 def test_cors_allows_only_configured_origins(monkeypatch):
