@@ -357,6 +357,32 @@ Returns portfolio-wide counts from Assets, Simulation Results, and Dispatch Even
 
 The endpoint returns a structured `502` identifying Airtable if summary data cannot be retrieved.
 
+### `GET /portfolio/assets`
+
+Returns one performance object for every record in `Assets`, including assets with no dispatch history. Metrics are calculated at request time from the paginated `Dispatch Events` table; the Airtable `Asset Summary` table is not read or written.
+
+```json
+[
+  {
+    "asset_id": "BAT-001",
+    "asset_name": "North Battery",
+    "technology": "LFP",
+    "status": "Active",
+    "power_mw": 10,
+    "energy_mwh": 40,
+    "location": "NP15",
+    "total_dispatches": 2,
+    "total_revenue": 2000,
+    "total_charging_cost": 650,
+    "total_profit": 1150,
+    "average_profit_per_dispatch": 575,
+    "last_dispatch_time": "2025-07-19T19:00:00Z"
+  }
+]
+```
+
+Dispatches are matched only through Airtable record IDs in the `Dispatch Events.asset_id` linked-record array. Plain business asset IDs are not treated as links. `last_dispatch_time` is the latest valid `discharge_end` timestamp for the asset, or `null` when no valid timestamp exists. Missing or malformed numeric fields contribute `0` and are logged without exposing credentials. Airtable timeouts and other upstream failures return a structured `502` identifying Airtable.
+
 Keep the personal access token in the deployment provider's secret manager. Do not expose it in Retool, commit it to Git, or add it to `.env.example`.
 
 ## OpenAPI Documentation
