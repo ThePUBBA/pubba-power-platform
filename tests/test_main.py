@@ -329,7 +329,7 @@ def test_post_simulate_skips_dispatch_for_missing_asset(monkeypatch):
     assert response.status_code == 200
 
 
-def test_post_simulate_continues_daily_pnl_after_dispatch_failure(monkeypatch):
+def test_post_simulate_skips_daily_pnl_after_dispatch_failure(monkeypatch):
     import main
 
     monkeypatch.setattr(
@@ -353,14 +353,8 @@ def test_post_simulate_continues_daily_pnl_after_dispatch_failure(monkeypatch):
     )
     monkeypatch.setattr(
         main,
-        "find_or_create_daily_pnl",
-        lambda date: {"id": "recDaily", "fields": {"date": date}},
-    )
-    updated = {}
-    monkeypatch.setattr(
-        main,
-        "update_daily_pnl_totals",
-        lambda record, result: updated.update(record=record, result=result),
+        "recalculate_daily_pnl",
+        lambda date: (_ for _ in ()).throw(AssertionError("unexpected P&L update")),
     )
 
     response = TestClient(main.app).post(
@@ -368,8 +362,49 @@ def test_post_simulate_continues_daily_pnl_after_dispatch_failure(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert updated["record"]["id"] == "recDaily"
-    assert updated["result"]["estimated_net_margin"] == 2570
+
+
+def test_post_simulate_dispatch_failure_then_retry_updates_pnl_once(monkeypatch):
+    import main
+
+    monkeypatch.setattr(
+        main,
+        "fetch_lmp_data",
+        lambda location, market, date: make_lmp_frame(
+            [100, 90, 20, 10, 12, 18, 50, 60, 80, 100, 95, 85]
+        ),
+    )
+    monkeypatch.setattr(main, "airtable_is_configured", lambda: True)
+    monkeypatch.setattr(main, "save_simulation_to_airtable", lambda result: "recSim")
+    monkeypatch.setattr(
+        main,
+        "find_asset_by_asset_id",
+        lambda asset_id: {"id": "recAsset", "fields": {"asset_id": asset_id}},
+    )
+    dispatch_attempts = []
+
+    def create_dispatch(*args):
+        dispatch_attempts.append(args)
+        if len(dispatch_attempts) == 1:
+            raise main.AirtableError("dispatch unavailable")
+        return {"id": "recDispatch"}
+
+    monkeypatch.setattr(main, "create_dispatch_event", create_dispatch)
+    pnl_dates = []
+    monkeypatch.setattr(main, "recalculate_daily_pnl", pnl_dates.append)
+    client = TestClient(main.app)
+
+    first = client.post(
+        "/simulate", json=simulation_payload(asset_id="BAT-001")
+    )
+    second = client.post(
+        "/simulate", json=simulation_payload(asset_id="BAT-001")
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert len(dispatch_attempts) == 2
+    assert pnl_dates == ["2025-04-01"]
 
 
 def test_post_simulate_returns_result_when_airtable_is_unavailable(
@@ -394,8 +429,15 @@ def test_post_simulate_returns_result_when_airtable_is_unavailable(
         )
 
     monkeypatch.setattr(main, "save_simulation_to_airtable", fail)
+    monkeypatch.setattr(
+        main,
+        "find_asset_by_asset_id",
+        lambda asset_id: (_ for _ in ()).throw(AssertionError("unexpected lookup")),
+    )
 
-    response = TestClient(main.app).post("/simulate", json=simulation_payload())
+    response = TestClient(main.app).post(
+        "/simulate", json=simulation_payload(asset_id="BAT-001")
+    )
 
     assert response.status_code == 200
     assert response.json()["estimated_net_margin"] == 2570

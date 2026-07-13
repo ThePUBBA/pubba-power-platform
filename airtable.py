@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 from datetime import datetime, timezone
 from urllib.parse import quote
-from uuid import uuid4
 
 import requests
 
@@ -16,12 +15,15 @@ DEFAULT_TABLES = {
     "AIRTABLE_ASSETS_TABLE": "Assets",
     "AIRTABLE_DISPATCH_EVENTS_TABLE": "Dispatch Events",
     "AIRTABLE_DAILY_PNL_TABLE": "Daily P&L",
-    "AIRTABLE_ASSET_SUMMARY_TABLE": "Asset Summary",
 }
 
 
 class AirtableError(RuntimeError):
     """Raised when a configured Airtable request cannot be completed."""
+
+
+class AirtableIntegrityError(AirtableError):
+    """Raised when Airtable contains duplicate ledger records."""
 
 
 def airtable_is_configured() -> bool:
@@ -77,12 +79,33 @@ def find_asset_by_asset_id(asset_id: str) -> dict | None:
 def create_dispatch_event(
     asset: dict,
     simulation_result: dict,
-    simulation_record_id: str | None = None,
+    simulation_record_id: str,
 ) -> dict:
-    asset_fields = asset.get("fields", {})
+    if not asset.get("id") or not simulation_record_id:
+        raise AirtableError(
+            "Dispatch creation requires Airtable asset and simulation record IDs"
+        )
+    dispatch_id = f"dispatch:{simulation_record_id}"
+    existing = _list_records(
+        _table_name("AIRTABLE_DISPATCH_EVENTS_TABLE"),
+        params={
+            "filterByFormula": (
+                f"{{dispatch_id}}='{_escape_formula_value(dispatch_id)}'"
+            ),
+            "maxRecords": 2,
+        },
+    )
+    if len(existing) > 1:
+        raise AirtableIntegrityError(
+            f"Duplicate Dispatch Events rows found for dispatch_id={dispatch_id}"
+        )
+    if existing:
+        return existing[0]
+
     fields = {
-        "dispatch_id": str(uuid4()),
-        "asset_id": asset_fields.get("asset_id"),
+        "dispatch_id": dispatch_id,
+        "asset_id": [asset["id"]],
+        "simulation": [simulation_record_id],
         "charge_start": simulation_result["charging_window"]["start_timestamp"],
         "charge_end": simulation_result["charging_window"]["end_timestamp"],
         "discharge_start": simulation_result["discharging_window"]["start_timestamp"],
@@ -91,8 +114,6 @@ def create_dispatch_event(
         "discharge_revenue": simulation_result["discharge_revenue"],
         "estimated_profit": simulation_result["estimated_net_margin"],
     }
-    if simulation_record_id:
-        fields["simulation"] = simulation_record_id
     return _request(
         "post",
         _table_name("AIRTABLE_DISPATCH_EVENTS_TABLE"),
@@ -100,50 +121,56 @@ def create_dispatch_event(
     )
 
 
-def find_or_create_daily_pnl(date_value: str) -> dict:
-    records = _list_records(
+def recalculate_daily_pnl(date_value: str) -> dict:
+    """Upsert exact Daily P&L totals derived from Dispatch Events for one UTC day."""
+
+    dispatches = _list_records(
+        _table_name("AIRTABLE_DISPATCH_EVENTS_TABLE"),
+        params={
+            "filterByFormula": (
+                f"LEFT({{charge_start}}, 10)='{_escape_formula_value(date_value)}'"
+            )
+        },
+    )
+    totals = {
+        "date": date_value,
+        "gross_revenue": 0.0,
+        "charging_cost": 0.0,
+        "storage_cost": 0.0,
+        "net_profit": 0.0,
+    }
+    for dispatch in dispatches:
+        fields = dispatch.get("fields", {})
+        revenue = _number(fields.get("discharge_revenue"))
+        charging_cost = _number(fields.get("charging_cost"))
+        net_profit = _number(fields.get("estimated_profit"))
+        totals["gross_revenue"] += revenue
+        totals["charging_cost"] += charging_cost
+        totals["storage_cost"] += revenue - charging_cost - net_profit
+        totals["net_profit"] += net_profit
+
+    daily_records = _list_records(
         _table_name("AIRTABLE_DAILY_PNL_TABLE"),
         params={
             "filterByFormula": f"{{date}}='{_escape_formula_value(date_value)}'",
-            "maxRecords": 1,
+            "maxRecords": 2,
         },
     )
-    if records:
-        return records[0]
+    if len(daily_records) > 1:
+        raise AirtableIntegrityError(
+            f"Duplicate Daily P&L rows found for date={date_value}"
+        )
+    if daily_records:
+        return _request(
+            "patch",
+            _table_name("AIRTABLE_DAILY_PNL_TABLE"),
+            record_id=daily_records[0]["id"],
+            json={"fields": totals, "typecast": True},
+        )
     return _request(
         "post",
         _table_name("AIRTABLE_DAILY_PNL_TABLE"),
-        json={
-            "fields": {
-                "date": date_value,
-                "gross_revenue": 0,
-                "charging_cost": 0,
-                "storage_cost": 0,
-                "net_profit": 0,
-            },
-            "typecast": True,
-        },
-    )
-
-
-def update_daily_pnl_totals(daily_record: dict, simulation_result: dict) -> dict:
-    current = daily_record.get("fields", {})
-    fields = {
-        "gross_revenue": _number(current.get("gross_revenue"))
-        + simulation_result["discharge_revenue"],
-        "charging_cost": _number(current.get("charging_cost"))
-        + simulation_result["charging_cost"],
-        "storage_cost": _number(current.get("storage_cost"))
-        + simulation_result["storage_lease_cost"]
-        + simulation_result["variable_operating_cost"],
-        "net_profit": _number(current.get("net_profit"))
-        + simulation_result["estimated_net_margin"],
-    }
-    return _request(
-        "patch",
-        _table_name("AIRTABLE_DAILY_PNL_TABLE"),
-        record_id=daily_record["id"],
-        json={"fields": fields, "typecast": True},
+        json={"fields": totals, "typecast": True},
     )
 
 
