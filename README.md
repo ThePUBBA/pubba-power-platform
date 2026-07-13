@@ -262,10 +262,9 @@ AIRTABLE_SIMULATIONS_TABLE=Simulation Results
 AIRTABLE_ASSETS_TABLE=Assets
 AIRTABLE_DISPATCH_EVENTS_TABLE=Dispatch Events
 AIRTABLE_DAILY_PNL_TABLE=Daily P&L
-AIRTABLE_ASSET_SUMMARY_TABLE=Asset Summary
 ```
 
-`AIRTABLE_TABLE_NAME` remains supported as a legacy fallback for `AIRTABLE_SIMULATIONS_TABLE`. The five new variables default to the exact table names shown above, but explicitly setting them is recommended for production.
+`AIRTABLE_TABLE_NAME` remains supported as a legacy fallback for `AIRTABLE_SIMULATIONS_TABLE`. The four table-specific variables default to the exact table names shown above, but explicitly setting them is recommended for production. `AIRTABLE_ASSET_SUMMARY_TABLE` was removed because the API does not read or write that table.
 
 The target table must contain all 16 field names below exactly as written. Airtable field names are case-sensitive for API writes.
 
@@ -302,20 +301,25 @@ The portfolio ledger expects these exact, case-sensitive fields:
 | `Assets` | `asset_id`, `asset_name`, `technology`, `power_mw`, `energy_mwh`, `duration_hours`, `location`, `lease_cost_monthly`, `status` |
 | `Dispatch Events` | `dispatch_id`, `asset_id`, `simulation`, `charge_start`, `charge_end`, `discharge_start`, `discharge_end`, `charging_cost`, `discharge_revenue`, `estimated_profit` |
 | `Daily P&L` | `date`, `gross_revenue`, `charging_cost`, `storage_cost`, `net_profit` |
-| `Asset Summary` | `asset_id`, `asset_name`, `total_simulations`, `total_revenue`, `total_charging_cost`, `total_profit`, `average_profit`, `utilization_percent` |
 
-For the current text-based tables, `Dispatch Events.asset_id` stores the matching business asset ID and `Dispatch Events.simulation` stores the Airtable record ID returned by the Simulation Results write. For stronger Airtable-native relationships, configure these as linked-record fields to `Assets` and `Simulation Results` and update the values to linked-record arrays. Use Number/Currency types for financial and capacity fields and Date types for date/time fields so Airtable can aggregate and sort them correctly.
+`Dispatch Events.asset_id` must be a linked-record field targeting `Assets`, and `Dispatch Events.simulation` must be a linked-record field targeting `Simulation Results`. The API sends Airtable record-ID arrays such as `{"asset_id": ["recAsset"], "simulation": ["recSimulation"]}` and never writes business IDs into these linked fields. Use Number/Currency types for financial and capacity fields and Date types for date/time fields so Airtable can aggregate and sort them correctly.
 
 ### Simulation-to-dispatch flow
 
-`POST /simulate` accepts an optional `asset_id`. Every successful simulation is archived to `Simulation Results` when Airtable is configured. When `asset_id` is present, the API looks up that exact ID in `Assets`; it never creates an asset automatically. If found, the API creates a Dispatch Events record, includes the simulation record ID when available, finds or creates the matching Daily P&L date, and increments:
+`POST /simulate` accepts an optional business `asset_id`. The failure-tolerant ledger workflow runs in this order:
 
-- `gross_revenue` by `discharge_revenue`
-- `charging_cost` by the simulation charging cost
-- `storage_cost` by `storage_lease_cost + variable_operating_cost`
-- `net_profit` by `estimated_net_margin`
+1. Archive the completed simulation and retain its Airtable record ID.
+2. Look up the existing asset; never create one automatically.
+3. Find or create the deterministic dispatch record linked to both Airtable records.
+4. Only after the dispatch exists, recalculate the day's Daily P&L from Dispatch Events.
 
-Each Airtable step is failure-tolerant. A partial Airtable outage is logged with the operation name and redacted error details, while the completed simulation still returns normally. No Dispatch Events record is created when `asset_id` is omitted or not found.
+Dispatch Events is the authoritative financial ledger. Daily P&L is derived rather than incremented from the incoming request: revenue sums `discharge_revenue`, charging cost sums `charging_cost`, net profit sums `estimated_profit`, and storage cost is derived as `discharge_revenue - charging_cost - estimated_profit`. Dispatches are grouped by the ISO date prefix stored in `charge_start`.
+
+Dispatch idempotency uses `dispatch:<simulation_record_id>` as the deterministic `dispatch_id`. A ledger retry for the same archived Simulation Results record queries this ID first and reuses an existing row, so it does not intentionally create another dispatch. Daily P&L recalculation overwrites exact ledger-derived totals, so repeating it does not double-count. Retrying the entire HTTP simulation creates a new Simulation Results record and is therefore a distinct ledger event. Duplicate Daily P&L rows are treated as an integrity error and are not updated.
+
+Each Airtable step is failure-tolerant. Archive, asset lookup, or dispatch failure stops downstream ledger updates and logs redacted details, while the completed simulation still returns normally. No Dispatch Events or Daily P&L record is created when `asset_id` is omitted or not found.
+
+Because Airtable does not provide transactions or uniqueness constraints, two truly concurrent workers can still both pass the dispatch/date lookup before either creates its row, and concurrent Daily P&L recalculations can race. Use a single API worker or external serialization for strict cross-worker guarantees, and monitor integrity-error logs for duplicates.
 
 Example request with an asset link:
 

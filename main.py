@@ -18,10 +18,9 @@ from airtable import (
     airtable_is_configured,
     create_dispatch_event,
     find_asset_by_asset_id,
-    find_or_create_daily_pnl,
     get_portfolio_summary,
+    recalculate_daily_pnl,
     save_simulation_to_airtable,
-    update_daily_pnl_totals,
 )
 from caiso import CaisoOasisError, fetch_lmp_data
 from simulation import StorageSimulationError, simulate_storage_profit
@@ -197,6 +196,14 @@ def _archive_simulation(request: SimulationRequest, result: dict) -> None:
             "Airtable operation failed",
             extra={"airtable_operation": "archive_simulation"},
         )
+        return
+
+    if not simulation_record_id:
+        logger.error(
+            "Airtable simulation archive returned no record ID; skipping ledger updates",
+            extra={"airtable_operation": "archive_simulation"},
+        )
+        return
 
     if not request.asset_id:
         return
@@ -222,11 +229,11 @@ def _archive_simulation(request: SimulationRequest, result: dict) -> None:
             "Airtable operation failed",
             extra={"airtable_operation": "create_dispatch", "asset_id": request.asset_id},
         )
+        return
 
-    pnl_date = request.date or datetime.now(timezone.utc).date().isoformat()
+    pnl_date = airtable_result["charging_window"]["start_timestamp"][:10]
     try:
-        daily_record = find_or_create_daily_pnl(pnl_date)
-        update_daily_pnl_totals(daily_record, airtable_result)
+        recalculate_daily_pnl(pnl_date)
     except AirtableError:
         logger.exception(
             "Airtable operation failed",

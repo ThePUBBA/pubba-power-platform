@@ -47,7 +47,6 @@ def configure_airtable(monkeypatch):
     monkeypatch.setenv("AIRTABLE_ASSETS_TABLE", "Assets")
     monkeypatch.setenv("AIRTABLE_DISPATCH_EVENTS_TABLE", "Dispatch Events")
     monkeypatch.setenv("AIRTABLE_DAILY_PNL_TABLE", "Daily P&L")
-    monkeypatch.setenv("AIRTABLE_ASSET_SUMMARY_TABLE", "Asset Summary")
 
 
 def test_save_simulation_posts_expected_airtable_record(monkeypatch):
@@ -162,10 +161,12 @@ def test_find_asset_by_asset_id_returns_none_when_missing(monkeypatch):
 
 def test_create_dispatch_event_links_asset_and_simulation(monkeypatch):
     configure_airtable(monkeypatch)
-    captured = {}
+    calls = []
 
     def mock_request(method, url, headers, params, json, timeout):
-        captured.update(method=method, url=url, json=json)
+        calls.append((method, url, params, json))
+        if method == "get":
+            return MockResponse(payload={"records": []})
         return MockResponse(payload={"id": "recDispatch", "fields": json["fields"]})
 
     monkeypatch.setattr(airtable.requests, "request", mock_request)
@@ -176,65 +177,127 @@ def test_create_dispatch_event_links_asset_and_simulation(monkeypatch):
     )
 
     assert record["id"] == "recDispatch"
-    assert captured["url"].endswith("/Dispatch%20Events")
-    assert captured["json"]["fields"]["asset_id"] == "BAT-001"
-    assert captured["json"]["fields"]["simulation"] == "recSimulation"
+    assert calls[0][2]["filterByFormula"] == (
+        "{dispatch_id}='dispatch:recSimulation'"
+    )
+    fields = calls[1][3]["fields"]
+    assert fields["dispatch_id"] == "dispatch:recSimulation"
+    assert fields["asset_id"] == ["recAsset"]
+    assert fields["simulation"] == ["recSimulation"]
 
 
-def test_find_or_create_daily_pnl_creates_missing_date(monkeypatch):
+def test_create_dispatch_event_reuses_existing_record_on_retry(monkeypatch):
+    configure_airtable(monkeypatch)
+    calls = []
+
+    def mock_request(method, url, headers, params, json, timeout):
+        calls.append(method)
+        return MockResponse(
+            payload={
+                "records": [
+                    {
+                        "id": "recDispatch",
+                        "fields": {"dispatch_id": "dispatch:recSimulation"},
+                    }
+                ]
+            }
+        )
+
+    monkeypatch.setattr(airtable.requests, "request", mock_request)
+
+    record = airtable.create_dispatch_event(
+        {"id": "recAsset", "fields": {"asset_id": "BAT-001"}},
+        simulation_result(),
+        "recSimulation",
+    )
+
+    assert record["id"] == "recDispatch"
+    assert calls == ["get"]
+
+
+def test_recalculate_daily_pnl_creates_totals_from_dispatch_ledger(monkeypatch):
     configure_airtable(monkeypatch)
     responses = iter(
         [
-            MockResponse(payload={"records": []}),
-            MockResponse(payload={"id": "recDaily", "fields": {"date": "2025-07-18"}}),
+            {"records": [{"fields": {
+                "discharge_revenue": "3600",
+                "charging_cost": "750",
+                "estimated_profit": "2570",
+            }}]},
+            {"records": []},
+            {"id": "recDaily", "fields": {}},
         ]
     )
     calls = []
 
     def mock_request(method, url, headers, params, json, timeout):
         calls.append((method, json))
-        return next(responses)
+        return MockResponse(payload=next(responses))
 
     monkeypatch.setattr(airtable.requests, "request", mock_request)
 
-    record = airtable.find_or_create_daily_pnl("2025-07-18")
+    record = airtable.recalculate_daily_pnl("2025-07-18")
 
     assert record["id"] == "recDaily"
-    assert calls[0][0] == "get"
-    assert calls[1][0] == "post"
-    assert calls[1][1]["fields"]["net_profit"] == 0
+    assert [call[0] for call in calls] == ["get", "get", "post"]
+    assert calls[2][1]["fields"] == {
+        "date": "2025-07-18",
+        "gross_revenue": 3600.0,
+        "charging_cost": 750.0,
+        "storage_cost": 280.0,
+        "net_profit": 2570.0,
+    }
 
 
-def test_update_daily_pnl_adds_simulation_totals(monkeypatch):
+def test_recalculate_daily_pnl_retry_does_not_double_count(monkeypatch):
     configure_airtable(monkeypatch)
-    captured = {}
+    payloads = []
 
     def mock_request(method, url, headers, params, json, timeout):
-        captured.update(method=method, url=url, json=json)
+        if "Dispatch%20Events" in url:
+            return MockResponse(payload={"records": [{"fields": {
+                "discharge_revenue": "3600",
+                "charging_cost": "750",
+                "estimated_profit": "2570",
+            }}]})
+        if method == "get":
+            return MockResponse(payload={"records": [{
+                "id": "recDaily",
+                "fields": {"net_profit": "2570"},
+            }]})
+        payloads.append(json["fields"])
         return MockResponse(payload={"id": "recDaily", "fields": json["fields"]})
 
     monkeypatch.setattr(airtable.requests, "request", mock_request)
-    record = airtable.update_daily_pnl_totals(
-        {
-            "id": "recDaily",
-            "fields": {
-                "gross_revenue": "100",
-                "charging_cost": "20",
-                "storage_cost": "5",
-                "net_profit": "75",
-            },
-        },
-        simulation_result(),
+
+    airtable.recalculate_daily_pnl("2025-07-18")
+    airtable.recalculate_daily_pnl("2025-07-18")
+
+    assert len(payloads) == 2
+    assert payloads[0] == payloads[1]
+    assert payloads[1]["net_profit"] == 2570.0
+
+
+def test_recalculate_daily_pnl_detects_duplicate_rows(monkeypatch):
+    configure_airtable(monkeypatch)
+    responses = iter(
+        [
+            {"records": []},
+            {"records": [{"id": "recOne"}, {"id": "recTwo"}]},
+        ]
+    )
+    monkeypatch.setattr(
+        airtable.requests,
+        "request",
+        lambda *args, **kwargs: MockResponse(payload=next(responses)),
     )
 
-    assert captured["method"] == "patch"
-    assert captured["url"].endswith("/Daily%20P%26L/recDaily")
-    assert record["fields"] == {
-        "gross_revenue": 3700.0,
-        "charging_cost": 770.0,
-        "storage_cost": 285.0,
-        "net_profit": 2645.0,
-    }
+    try:
+        airtable.recalculate_daily_pnl("2025-07-18")
+    except airtable.AirtableIntegrityError as exc:
+        assert "Duplicate Daily P&L rows" in str(exc)
+    else:
+        raise AssertionError("Expected AirtableIntegrityError")
 
 
 def test_get_portfolio_summary_aggregates_tables(monkeypatch):
@@ -281,6 +344,88 @@ def test_get_portfolio_summary_aggregates_tables(monkeypatch):
         "cumulative_storage_cost": 125.0,
         "cumulative_net_profit": 625.0,
     }
+
+
+def test_get_portfolio_summary_handles_empty_tables(monkeypatch):
+    configure_airtable(monkeypatch)
+    monkeypatch.setattr(
+        airtable.requests,
+        "request",
+        lambda *args, **kwargs: MockResponse(payload={"records": []}),
+    )
+
+    assert airtable.get_portfolio_summary() == {
+        "total_assets": 0,
+        "active_assets": 0,
+        "total_simulations": 0,
+        "total_dispatches": 0,
+        "cumulative_revenue": 0,
+        "cumulative_charging_cost": 0,
+        "cumulative_storage_cost": 0,
+        "cumulative_net_profit": 0,
+    }
+
+
+def test_list_records_follows_airtable_pagination(monkeypatch):
+    configure_airtable(monkeypatch)
+    calls = []
+
+    def mock_request(method, url, headers, params, json, timeout):
+        calls.append(dict(params))
+        if len(calls) == 1:
+            return MockResponse(
+                payload={"records": [{"id": "recOne"}], "offset": "next-page"}
+            )
+        return MockResponse(payload={"records": [{"id": "recTwo"}]})
+
+    monkeypatch.setattr(airtable.requests, "request", mock_request)
+
+    records = airtable._list_records("Assets")
+
+    assert [record["id"] for record in records] == ["recOne", "recTwo"]
+    assert calls[1]["offset"] == "next-page"
+
+
+def test_get_portfolio_summary_rejects_malformed_numeric_values(monkeypatch):
+    configure_airtable(monkeypatch)
+    responses = iter(
+        [
+            {"records": []},
+            {"records": []},
+            {"records": []},
+            {"records": [{"fields": {"net_profit": "not-a-number"}}]},
+        ]
+    )
+    monkeypatch.setattr(
+        airtable.requests,
+        "request",
+        lambda *args, **kwargs: MockResponse(payload=next(responses)),
+    )
+
+    try:
+        airtable.get_portfolio_summary()
+    except airtable.AirtableError as exc:
+        assert "invalid value" in str(exc)
+    else:
+        raise AssertionError("Expected AirtableError")
+
+
+def test_get_portfolio_summary_propagates_airtable_timeout(monkeypatch):
+    configure_airtable(monkeypatch)
+    monkeypatch.setattr(
+        airtable.requests,
+        "request",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            requests.Timeout("Airtable timed out")
+        ),
+    )
+
+    try:
+        airtable.get_portfolio_summary()
+    except airtable.AirtableError as exc:
+        assert "error_type=request_error" in str(exc)
+    else:
+        raise AssertionError("Expected AirtableError")
 
 
 def test_save_simulation_reports_airtable_403_without_exposing_token(monkeypatch):
