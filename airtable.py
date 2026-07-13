@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from datetime import datetime, timezone
 from urllib.parse import quote
+from uuid import uuid4
 
 import requests
 
@@ -10,30 +11,31 @@ import requests
 AIRTABLE_API_URL = "https://api.airtable.com/v0"
 AIRTABLE_TIMEOUT_SECONDS = 10
 
+DEFAULT_TABLES = {
+    "AIRTABLE_SIMULATIONS_TABLE": "Simulation Results",
+    "AIRTABLE_ASSETS_TABLE": "Assets",
+    "AIRTABLE_DISPATCH_EVENTS_TABLE": "Dispatch Events",
+    "AIRTABLE_DAILY_PNL_TABLE": "Daily P&L",
+    "AIRTABLE_ASSET_SUMMARY_TABLE": "Asset Summary",
+}
+
 
 class AirtableError(RuntimeError):
-    """Raised when a configured Airtable write cannot be completed."""
+    """Raised when a configured Airtable request cannot be completed."""
 
 
 def airtable_is_configured() -> bool:
     return all(
         os.getenv(name, "").strip()
-        for name in (
-            "AIRTABLE_API_KEY",
-            "AIRTABLE_BASE_ID",
-            "AIRTABLE_TABLE_NAME",
-        )
-    )
+        for name in ("AIRTABLE_API_KEY", "AIRTABLE_BASE_ID")
+    ) and bool(_table_name("AIRTABLE_SIMULATIONS_TABLE"))
 
 
-def save_simulation_to_airtable(simulation_result: dict) -> None:
-    """Write one completed simulation to Airtable when credentials are configured."""
+def save_simulation_to_airtable(simulation_result: dict) -> str | None:
+    """Write one completed simulation and return its Airtable record ID."""
 
-    api_key = os.getenv("AIRTABLE_API_KEY", "").strip()
-    base_id = os.getenv("AIRTABLE_BASE_ID", "").strip()
-    table_name = os.getenv("AIRTABLE_TABLE_NAME", "").strip()
-    if not api_key or not base_id or not table_name:
-        return
+    if not airtable_is_configured():
+        return None
 
     fields = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -48,65 +50,228 @@ def save_simulation_to_airtable(simulation_result: dict) -> None:
         "discharge_revenue": simulation_result["discharge_revenue"],
         "gross_arbitrage_margin": simulation_result["gross_arbitrage_margin"],
         "estimated_net_margin": simulation_result["estimated_net_margin"],
-        "charging_window_start": simulation_result["charging_window"][
-            "start_timestamp"
-        ],
+        "charging_window_start": simulation_result["charging_window"]["start_timestamp"],
         "charging_window_end": simulation_result["charging_window"]["end_timestamp"],
-        "discharging_window_start": simulation_result["discharging_window"][
-            "start_timestamp"
-        ],
-        "discharging_window_end": simulation_result["discharging_window"][
-            "end_timestamp"
-        ],
+        "discharging_window_start": simulation_result["discharging_window"]["start_timestamp"],
+        "discharging_window_end": simulation_result["discharging_window"]["end_timestamp"],
     }
-    url = f"{AIRTABLE_API_URL}/{quote(base_id, safe='')}/{quote(table_name, safe='')}"
+    payload = _request(
+        "post",
+        _table_name("AIRTABLE_SIMULATIONS_TABLE"),
+        json={"fields": fields, "typecast": True},
+    )
+    return payload.get("id") if isinstance(payload, dict) else None
 
+
+def find_asset_by_asset_id(asset_id: str) -> dict | None:
+    records = _list_records(
+        _table_name("AIRTABLE_ASSETS_TABLE"),
+        params={
+            "filterByFormula": f"{{asset_id}}='{_escape_formula_value(asset_id)}'",
+            "maxRecords": 1,
+        },
+    )
+    return records[0] if records else None
+
+
+def create_dispatch_event(
+    asset: dict,
+    simulation_result: dict,
+    simulation_record_id: str | None = None,
+) -> dict:
+    asset_fields = asset.get("fields", {})
+    fields = {
+        "dispatch_id": str(uuid4()),
+        "asset_id": asset_fields.get("asset_id"),
+        "charge_start": simulation_result["charging_window"]["start_timestamp"],
+        "charge_end": simulation_result["charging_window"]["end_timestamp"],
+        "discharge_start": simulation_result["discharging_window"]["start_timestamp"],
+        "discharge_end": simulation_result["discharging_window"]["end_timestamp"],
+        "charging_cost": simulation_result["charging_cost"],
+        "discharge_revenue": simulation_result["discharge_revenue"],
+        "estimated_profit": simulation_result["estimated_net_margin"],
+    }
+    if simulation_record_id:
+        fields["simulation"] = simulation_record_id
+    return _request(
+        "post",
+        _table_name("AIRTABLE_DISPATCH_EVENTS_TABLE"),
+        json={"fields": fields, "typecast": True},
+    )
+
+
+def find_or_create_daily_pnl(date_value: str) -> dict:
+    records = _list_records(
+        _table_name("AIRTABLE_DAILY_PNL_TABLE"),
+        params={
+            "filterByFormula": f"{{date}}='{_escape_formula_value(date_value)}'",
+            "maxRecords": 1,
+        },
+    )
+    if records:
+        return records[0]
+    return _request(
+        "post",
+        _table_name("AIRTABLE_DAILY_PNL_TABLE"),
+        json={
+            "fields": {
+                "date": date_value,
+                "gross_revenue": 0,
+                "charging_cost": 0,
+                "storage_cost": 0,
+                "net_profit": 0,
+            },
+            "typecast": True,
+        },
+    )
+
+
+def update_daily_pnl_totals(daily_record: dict, simulation_result: dict) -> dict:
+    current = daily_record.get("fields", {})
+    fields = {
+        "gross_revenue": _number(current.get("gross_revenue"))
+        + simulation_result["discharge_revenue"],
+        "charging_cost": _number(current.get("charging_cost"))
+        + simulation_result["charging_cost"],
+        "storage_cost": _number(current.get("storage_cost"))
+        + simulation_result["storage_lease_cost"]
+        + simulation_result["variable_operating_cost"],
+        "net_profit": _number(current.get("net_profit"))
+        + simulation_result["estimated_net_margin"],
+    }
+    return _request(
+        "patch",
+        _table_name("AIRTABLE_DAILY_PNL_TABLE"),
+        record_id=daily_record["id"],
+        json={"fields": fields, "typecast": True},
+    )
+
+
+def get_portfolio_summary() -> dict[str, int | float]:
+    assets = _list_records(_table_name("AIRTABLE_ASSETS_TABLE"))
+    simulations = _list_records(_table_name("AIRTABLE_SIMULATIONS_TABLE"))
+    dispatches = _list_records(_table_name("AIRTABLE_DISPATCH_EVENTS_TABLE"))
+    daily_records = _list_records(_table_name("AIRTABLE_DAILY_PNL_TABLE"))
+    return {
+        "total_assets": len(assets),
+        "active_assets": sum(
+            1
+            for record in assets
+            if str(record.get("fields", {}).get("status", "")).strip().lower()
+            == "active"
+        ),
+        "total_simulations": len(simulations),
+        "total_dispatches": len(dispatches),
+        "cumulative_revenue": sum(
+            _number(record.get("fields", {}).get("gross_revenue"))
+            for record in daily_records
+        ),
+        "cumulative_charging_cost": sum(
+            _number(record.get("fields", {}).get("charging_cost"))
+            for record in daily_records
+        ),
+        "cumulative_storage_cost": sum(
+            _number(record.get("fields", {}).get("storage_cost"))
+            for record in daily_records
+        ),
+        "cumulative_net_profit": sum(
+            _number(record.get("fields", {}).get("net_profit"))
+            for record in daily_records
+        ),
+    }
+
+
+def _table_name(environment_name: str) -> str:
+    if environment_name == "AIRTABLE_SIMULATIONS_TABLE":
+        legacy = os.getenv("AIRTABLE_TABLE_NAME", "").strip()
+        return os.getenv(environment_name, "").strip() or legacy or DEFAULT_TABLES[environment_name]
+    return os.getenv(environment_name, "").strip() or DEFAULT_TABLES[environment_name]
+
+
+def _list_records(table_name: str, params: dict | None = None) -> list[dict]:
+    records: list[dict] = []
+    request_params = dict(params or {})
+    request_params.setdefault("pageSize", 100)
+    while True:
+        payload = _request("get", table_name, params=request_params)
+        records.extend(payload.get("records", []))
+        offset = payload.get("offset")
+        if not offset or "maxRecords" in request_params:
+            return records
+        request_params["offset"] = offset
+
+
+def _request(
+    method: str,
+    table_name: str,
+    *,
+    record_id: str | None = None,
+    params: dict | None = None,
+    json: dict | None = None,
+) -> dict:
+    api_key = os.getenv("AIRTABLE_API_KEY", "").strip()
+    base_id = os.getenv("AIRTABLE_BASE_ID", "").strip()
+    if not api_key or not base_id:
+        raise AirtableError("Airtable is not configured")
+    url = f"{AIRTABLE_API_URL}/{quote(base_id, safe='')}/{quote(table_name, safe='')}"
+    if record_id:
+        url = f"{url}/{quote(record_id, safe='')}"
     try:
-        response = requests.post(
+        response = requests.request(
+            method,
             url,
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             },
-            json={"fields": fields, "typecast": True},
+            params=params,
+            json=json,
             timeout=AIRTABLE_TIMEOUT_SECONDS,
         )
         if response.status_code >= 400:
             raise _response_error(response, api_key)
+        return response.json()
     except requests.RequestException as exc:
         message = _redact(str(exc), api_key)
         raise AirtableError(
-            "Airtable record write failed: "
-            f"HTTP status=unavailable; error_type=request_error; "
-            f"message={message}; response_body=unavailable"
+            "Airtable request failed: HTTP status=unavailable; "
+            f"error_type=request_error; message={message}; response_body=unavailable"
         ) from exc
 
 
 def _response_error(response: requests.Response, api_key: str) -> AirtableError:
     response_body = _redact(response.text or "", api_key)
     error_type = "unknown"
-    error_message = "Airtable rejected the record"
+    error_message = "Airtable rejected the request"
     try:
         payload = response.json()
     except ValueError:
         payload = None
-
     if isinstance(payload, dict):
         error = payload.get("error")
         if isinstance(error, dict):
             error_type = str(error.get("type") or error_type)
             error_message = str(error.get("message") or error_message)
         elif error:
-            error_type = str(error)
-            error_message = str(error)
-
-    error_type = _redact(error_type, api_key)
-    error_message = _redact(error_message, api_key)
+            error_type = error_message = str(error)
     return AirtableError(
-        "Airtable record write failed: "
-        f"HTTP status={response.status_code}; error_type={error_type}; "
-        f"message={error_message}; response_body={response_body}"
+        "Airtable request failed: "
+        f"HTTP status={response.status_code}; error_type={_redact(error_type, api_key)}; "
+        f"message={_redact(error_message, api_key)}; response_body={response_body}"
     )
+
+
+def _escape_formula_value(value: str) -> str:
+    return str(value).replace("\\", "\\\\").replace("'", "\\'")
+
+
+def _number(value) -> float:
+    if value in (None, ""):
+        return 0.0
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise AirtableError(f"Airtable numeric field contains invalid value: {value!r}") from exc
 
 
 def _redact(value: str, secret: str) -> str:
