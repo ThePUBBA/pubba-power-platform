@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import math
 import os
 from datetime import datetime, timezone
 from urllib.parse import quote
@@ -9,6 +11,7 @@ import requests
 
 AIRTABLE_API_URL = "https://api.airtable.com/v0"
 AIRTABLE_TIMEOUT_SECONDS = 10
+logger = logging.getLogger(__name__)
 
 DEFAULT_TABLES = {
     "AIRTABLE_SIMULATIONS_TABLE": "Simulation Results",
@@ -208,6 +211,88 @@ def get_portfolio_summary() -> dict[str, int | float]:
     }
 
 
+def get_asset_performance() -> list[dict]:
+    """Return asset metrics derived from Assets and linked Dispatch Events."""
+
+    assets = _list_records(_table_name("AIRTABLE_ASSETS_TABLE"))
+    dispatches = _list_records(_table_name("AIRTABLE_DISPATCH_EVENTS_TABLE"))
+    performance_by_record_id = {
+        asset.get("id"): {
+            "total_dispatches": 0,
+            "total_revenue": 0.0,
+            "total_charging_cost": 0.0,
+            "total_profit": 0.0,
+            "last_dispatch_time": None,
+            "_last_dispatch_datetime": None,
+        }
+        for asset in assets
+        if asset.get("id")
+    }
+
+    for dispatch in dispatches:
+        fields = dispatch.get("fields", {})
+        linked_asset_ids = fields.get("asset_id")
+        if not isinstance(linked_asset_ids, list):
+            continue
+        dispatch_time = _dispatch_time(fields)
+        for asset_record_id in linked_asset_ids:
+            if not isinstance(asset_record_id, str):
+                continue
+            metrics = performance_by_record_id.get(asset_record_id)
+            if metrics is None:
+                continue
+            metrics["total_dispatches"] += 1
+            metrics["total_revenue"] += _safe_number(
+                fields.get("discharge_revenue"), "discharge_revenue"
+            )
+            metrics["total_charging_cost"] += _safe_number(
+                fields.get("charging_cost"), "charging_cost"
+            )
+            metrics["total_profit"] += _safe_number(
+                fields.get("estimated_profit"), "estimated_profit"
+            )
+            if dispatch_time and (
+                metrics["_last_dispatch_datetime"] is None
+                or dispatch_time[0] > metrics["_last_dispatch_datetime"]
+            ):
+                metrics["_last_dispatch_datetime"] = dispatch_time[0]
+                metrics["last_dispatch_time"] = dispatch_time[1]
+
+    results = []
+    for asset in assets:
+        fields = asset.get("fields", {})
+        metrics = performance_by_record_id.get(asset.get("id")) or {
+            "total_dispatches": 0,
+            "total_revenue": 0.0,
+            "total_charging_cost": 0.0,
+            "total_profit": 0.0,
+            "last_dispatch_time": None,
+        }
+        dispatch_count = metrics["total_dispatches"]
+        results.append(
+            {
+                "asset_id": str(fields.get("asset_id") or ""),
+                "asset_name": str(fields.get("asset_name") or ""),
+                "technology": str(fields.get("technology") or ""),
+                "status": str(fields.get("status") or ""),
+                "power_mw": _safe_number(fields.get("power_mw"), "power_mw"),
+                "energy_mwh": _safe_number(fields.get("energy_mwh"), "energy_mwh"),
+                "location": str(fields.get("location") or ""),
+                "total_dispatches": dispatch_count,
+                "total_revenue": metrics["total_revenue"],
+                "total_charging_cost": metrics["total_charging_cost"],
+                "total_profit": metrics["total_profit"],
+                "average_profit_per_dispatch": (
+                    metrics["total_profit"] / dispatch_count
+                    if dispatch_count
+                    else 0.0
+                ),
+                "last_dispatch_time": metrics["last_dispatch_time"],
+            }
+        )
+    return results
+
+
 def _table_name(environment_name: str) -> str:
     if environment_name == "AIRTABLE_SIMULATIONS_TABLE":
         legacy = os.getenv("AIRTABLE_TABLE_NAME", "").strip()
@@ -299,6 +384,40 @@ def _number(value) -> float:
         return float(value)
     except (TypeError, ValueError) as exc:
         raise AirtableError(f"Airtable numeric field contains invalid value: {value!r}") from exc
+
+
+def _safe_number(value, field_name: str) -> float:
+    if value in (None, ""):
+        return 0.0
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = math.nan
+    if not math.isfinite(number):
+        logger.warning(
+            "Ignoring malformed Airtable numeric value",
+            extra={"airtable_field": field_name},
+        )
+        return 0.0
+    return number
+
+
+def _dispatch_time(fields: dict) -> tuple[datetime, str] | None:
+    value = fields.get("discharge_end")
+    if not isinstance(value, str) or not value.strip():
+        return None
+    timestamp = value.strip()
+    try:
+        parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    except ValueError:
+        logger.warning(
+            "Ignoring malformed Airtable dispatch timestamp",
+            extra={"airtable_field": "discharge_end"},
+        )
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc), timestamp
 
 
 def _redact(value: str, secret: str) -> str:

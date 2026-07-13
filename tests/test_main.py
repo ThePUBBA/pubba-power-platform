@@ -573,6 +573,55 @@ def test_portfolio_summary_endpoint_returns_airtable_metrics(monkeypatch):
     assert response.json()["cumulative_net_profit"] == 5000
 
 
+def test_portfolio_assets_endpoint_returns_asset_performance(monkeypatch):
+    import main
+
+    monkeypatch.setattr(
+        main,
+        "get_asset_performance",
+        lambda: [{
+            "asset_id": "BAT-001",
+            "asset_name": "North Battery",
+            "technology": "LFP",
+            "status": "Active",
+            "power_mw": 10,
+            "energy_mwh": 40,
+            "location": "NP15",
+            "total_dispatches": 2,
+            "total_revenue": 2000,
+            "total_charging_cost": 650,
+            "total_profit": 1150,
+            "average_profit_per_dispatch": 575,
+            "last_dispatch_time": "2025-07-19T19:00:00Z",
+        }],
+    )
+
+    response = TestClient(main.app).get("/portfolio/assets")
+
+    assert response.status_code == 200
+    assert response.json()[0]["asset_id"] == "BAT-001"
+    assert response.json()[0]["average_profit_per_dispatch"] == 575
+
+
+def test_portfolio_assets_endpoint_identifies_airtable_timeout(monkeypatch):
+    import main
+
+    monkeypatch.setattr(
+        main,
+        "get_asset_performance",
+        lambda: (_ for _ in ()).throw(main.AirtableError("Airtable timed out")),
+    )
+
+    response = TestClient(main.app).get("/portfolio/assets")
+
+    assert response.status_code == 502
+    assert response.json() == {
+        "error_code": "upstream_service_error",
+        "message": "Airtable timed out",
+        "upstream_service": "Airtable",
+    }
+
+
 def test_cors_allows_only_configured_origins(monkeypatch):
     import main
 

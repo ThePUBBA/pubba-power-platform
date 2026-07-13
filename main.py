@@ -18,6 +18,7 @@ from airtable import (
     airtable_is_configured,
     create_dispatch_event,
     find_asset_by_asset_id,
+    get_asset_performance,
     get_portfolio_summary,
     recalculate_daily_pnl,
     save_simulation_to_airtable,
@@ -111,6 +112,22 @@ class PortfolioSummaryResponse(BaseModel):
     cumulative_charging_cost: float
     cumulative_storage_cost: float
     cumulative_net_profit: float
+
+
+class AssetPerformanceResponse(BaseModel):
+    asset_id: str
+    asset_name: str
+    technology: str
+    status: str
+    power_mw: float
+    energy_mwh: float
+    location: str
+    total_dispatches: int
+    total_revenue: float
+    total_charging_cost: float
+    total_profit: float
+    average_profit_per_dispatch: float
+    last_dispatch_time: Optional[str] = None
 
 
 class ApiError(Exception):
@@ -299,6 +316,18 @@ def create_app() -> FastAPI:
     def portfolio_summary():
         try:
             return get_portfolio_summary()
+        except AirtableError as exc:
+            raise ApiError(
+                502,
+                "upstream_service_error",
+                str(exc),
+                upstream_service="Airtable",
+            ) from exc
+
+    @app.get("/portfolio/assets", response_model=list[AssetPerformanceResponse])
+    def portfolio_assets():
+        try:
+            return get_asset_performance()
         except AirtableError as exc:
             raise ApiError(
                 502,

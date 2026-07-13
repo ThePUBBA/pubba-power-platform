@@ -300,6 +300,188 @@ def test_recalculate_daily_pnl_detects_duplicate_rows(monkeypatch):
         raise AssertionError("Expected AirtableIntegrityError")
 
 
+def test_get_asset_performance_aggregates_multiple_assets_and_zero_dispatches(
+    monkeypatch,
+):
+    configure_airtable(monkeypatch)
+    responses = iter(
+        [
+            {"records": [
+                {"id": "recAssetOne", "fields": {
+                    "asset_id": "BAT-001",
+                    "asset_name": "North Battery",
+                    "technology": "LFP",
+                    "status": "Active",
+                    "power_mw": "10",
+                    "energy_mwh": 40,
+                    "location": "NP15",
+                }},
+                {"id": "recAssetTwo", "fields": {
+                    "asset_id": "BAT-002",
+                    "asset_name": "South Battery",
+                    "technology": "NMC",
+                    "status": "Planned",
+                    "power_mw": 5,
+                    "energy_mwh": 20,
+                    "location": "SP15",
+                }},
+            ]},
+            {"records": [
+                {"fields": {
+                    "asset_id": ["recAssetOne"],
+                    "discharge_revenue": "1200",
+                    "charging_cost": "400",
+                    "estimated_profit": "700",
+                    "discharge_end": "2025-07-18T20:00:00Z",
+                }},
+                {"fields": {
+                    "asset_id": ["recAssetOne"],
+                    "discharge_revenue": 800,
+                    "charging_cost": 250,
+                    "estimated_profit": 450,
+                    "discharge_end": "2025-07-19T19:00:00Z",
+                }},
+            ]},
+        ]
+    )
+    monkeypatch.setattr(
+        airtable.requests,
+        "request",
+        lambda *args, **kwargs: MockResponse(payload=next(responses)),
+    )
+
+    performance = airtable.get_asset_performance()
+
+    assert performance == [
+        {
+            "asset_id": "BAT-001",
+            "asset_name": "North Battery",
+            "technology": "LFP",
+            "status": "Active",
+            "power_mw": 10.0,
+            "energy_mwh": 40.0,
+            "location": "NP15",
+            "total_dispatches": 2,
+            "total_revenue": 2000.0,
+            "total_charging_cost": 650.0,
+            "total_profit": 1150.0,
+            "average_profit_per_dispatch": 575.0,
+            "last_dispatch_time": "2025-07-19T19:00:00Z",
+        },
+        {
+            "asset_id": "BAT-002",
+            "asset_name": "South Battery",
+            "technology": "NMC",
+            "status": "Planned",
+            "power_mw": 5.0,
+            "energy_mwh": 20.0,
+            "location": "SP15",
+            "total_dispatches": 0,
+            "total_revenue": 0.0,
+            "total_charging_cost": 0.0,
+            "total_profit": 0.0,
+            "average_profit_per_dispatch": 0.0,
+            "last_dispatch_time": None,
+        },
+    ]
+
+
+def test_get_asset_performance_follows_asset_and_dispatch_pagination(monkeypatch):
+    configure_airtable(monkeypatch)
+    calls = []
+
+    def mock_request(method, url, headers, params, json, timeout):
+        calls.append((url, dict(params)))
+        if url.endswith("/Assets"):
+            if "offset" not in params:
+                return MockResponse(payload={
+                    "records": [{"id": "recOne", "fields": {"asset_id": "ONE"}}],
+                    "offset": "asset-next",
+                })
+            return MockResponse(payload={
+                "records": [{"id": "recTwo", "fields": {"asset_id": "TWO"}}]
+            })
+        if "offset" not in params:
+            return MockResponse(payload={
+                "records": [{"fields": {"asset_id": ["recOne"]}}],
+                "offset": "dispatch-next",
+            })
+        return MockResponse(payload={
+            "records": [{"fields": {"asset_id": ["recTwo"]}}]
+        })
+
+    monkeypatch.setattr(airtable.requests, "request", mock_request)
+
+    performance = airtable.get_asset_performance()
+
+    assert [item["asset_id"] for item in performance] == ["ONE", "TWO"]
+    assert [item["total_dispatches"] for item in performance] == [1, 1]
+    assert calls[1][1]["offset"] == "asset-next"
+    assert calls[3][1]["offset"] == "dispatch-next"
+
+
+def test_get_asset_performance_handles_malformed_values_and_plain_text_links(
+    monkeypatch, caplog
+):
+    configure_airtable(monkeypatch)
+    responses = iter(
+        [
+            {"records": [{"id": "recAsset", "fields": {
+                "asset_id": "BAT-001",
+                "power_mw": "not-a-number",
+                "energy_mwh": "NaN",
+            }}]},
+            {"records": [
+                {"fields": {
+                    "asset_id": ["recAsset"],
+                    "discharge_revenue": "invalid",
+                    "charging_cost": float("inf"),
+                    "estimated_profit": None,
+                    "discharge_end": "not-a-timestamp",
+                }},
+                {"fields": {
+                    "asset_id": "BAT-001",
+                    "discharge_revenue": 999,
+                }},
+            ]},
+        ]
+    )
+    monkeypatch.setattr(
+        airtable.requests,
+        "request",
+        lambda *args, **kwargs: MockResponse(payload=next(responses)),
+    )
+
+    performance = airtable.get_asset_performance()
+
+    assert performance[0]["power_mw"] == 0.0
+    assert performance[0]["energy_mwh"] == 0.0
+    assert performance[0]["total_dispatches"] == 1
+    assert performance[0]["total_revenue"] == 0.0
+    assert performance[0]["total_charging_cost"] == 0.0
+    assert performance[0]["total_profit"] == 0.0
+    assert performance[0]["last_dispatch_time"] is None
+    assert "Ignoring malformed Airtable numeric value" in caplog.text
+
+
+def test_get_asset_performance_propagates_airtable_timeout(monkeypatch):
+    configure_airtable(monkeypatch)
+    monkeypatch.setattr(
+        airtable.requests,
+        "request",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            requests.Timeout("Airtable timed out")
+        ),
+    )
+
+    try:
+        airtable.get_asset_performance()
+    except airtable.AirtableError as exc:
+        assert "error_type=request_error" in str(exc)
+    else:
+        raise AssertionError("Expected AirtableError")
+
+
 def test_get_portfolio_summary_aggregates_tables(monkeypatch):
     configure_airtable(monkeypatch)
     responses = iter(
