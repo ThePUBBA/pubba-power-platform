@@ -1,4 +1,6 @@
+import csv
 from datetime import datetime, timedelta, timezone
+from io import StringIO
 
 from fastapi.testclient import TestClient
 import pandas as pd
@@ -253,7 +255,7 @@ def test_post_simulate_returns_expected_profit(monkeypatch):
     assert response.json()["estimated_net_margin"] == 2570
 
 
-def test_post_simulate_archives_to_airtable_when_configured(monkeypatch):
+def test_post_simulate_persists_to_supabase_with_idempotency_key(monkeypatch):
     import main
 
     monkeypatch.setattr(
@@ -263,176 +265,57 @@ def test_post_simulate_archives_to_airtable_when_configured(monkeypatch):
             [100, 90, 20, 10, 12, 18, 50, 60, 80, 100, 95, 85]
         ),
     )
-    monkeypatch.setattr(main, "airtable_is_configured", lambda: True)
-    archived = {}
-    monkeypatch.setattr(
-        main,
-        "save_simulation_to_airtable",
-        lambda result: archived.update(result),
-    )
+    captured = {}
 
-    response = TestClient(main.app).post("/simulate", json=simulation_payload())
-
-    assert response.status_code == 200
-    assert archived["location"] == "TH_NP15_GEN-APND"
-    assert archived["market"] == "RTM"
-    assert archived["date"] == "2025-04-01"
-    assert archived["estimated_net_margin"] == 2570
-
-
-def test_post_simulate_without_asset_id_does_not_create_dispatch(monkeypatch):
-    import main
-
-    monkeypatch.setattr(
-        main,
-        "fetch_lmp_data",
-        lambda location, market, date: make_lmp_frame(
-            [100, 90, 20, 10, 12, 18, 50, 60, 80, 100, 95, 85]
-        ),
-    )
-    monkeypatch.setattr(main, "airtable_is_configured", lambda: True)
-    monkeypatch.setattr(main, "save_simulation_to_airtable", lambda result: "recSim")
-    monkeypatch.setattr(
-        main,
-        "find_asset_by_asset_id",
-        lambda asset_id: (_ for _ in ()).throw(AssertionError("unexpected lookup")),
-    )
-
-    response = TestClient(main.app).post("/simulate", json=simulation_payload())
-
-    assert response.status_code == 200
-
-
-def test_post_simulate_skips_dispatch_for_missing_asset(monkeypatch):
-    import main
-
-    monkeypatch.setattr(
-        main,
-        "fetch_lmp_data",
-        lambda location, market, date: make_lmp_frame(
-            [100, 90, 20, 10, 12, 18, 50, 60, 80, 100, 95, 85]
-        ),
-    )
-    monkeypatch.setattr(main, "airtable_is_configured", lambda: True)
-    monkeypatch.setattr(main, "save_simulation_to_airtable", lambda result: "recSim")
-    monkeypatch.setattr(main, "find_asset_by_asset_id", lambda asset_id: None)
-    monkeypatch.setattr(
-        main,
-        "create_dispatch_event",
-        lambda *args: (_ for _ in ()).throw(AssertionError("unexpected dispatch")),
-    )
-
-    response = TestClient(main.app).post(
-        "/simulate", json=simulation_payload(asset_id="MISSING")
-    )
-
-    assert response.status_code == 200
-
-
-def test_post_simulate_skips_daily_pnl_after_dispatch_failure(monkeypatch):
-    import main
-
-    monkeypatch.setattr(
-        main,
-        "fetch_lmp_data",
-        lambda location, market, date: make_lmp_frame(
-            [100, 90, 20, 10, 12, 18, 50, 60, 80, 100, 95, 85]
-        ),
-    )
-    monkeypatch.setattr(main, "airtable_is_configured", lambda: True)
-    monkeypatch.setattr(main, "save_simulation_to_airtable", lambda result: "recSim")
-    monkeypatch.setattr(
-        main,
-        "find_asset_by_asset_id",
-        lambda asset_id: {"id": "recAsset", "fields": {"asset_id": asset_id}},
-    )
-    monkeypatch.setattr(
-        main,
-        "create_dispatch_event",
-        lambda *args: (_ for _ in ()).throw(main.AirtableError("dispatch unavailable")),
-    )
-    monkeypatch.setattr(
-        main,
-        "recalculate_daily_pnl",
-        lambda date: (_ for _ in ()).throw(AssertionError("unexpected P&L update")),
-    )
-
-    response = TestClient(main.app).post(
-        "/simulate", json=simulation_payload(asset_id="BAT-001")
-    )
-
-    assert response.status_code == 200
-
-
-def test_post_simulate_dispatch_failure_then_retry_updates_pnl_once(monkeypatch):
-    import main
-
-    monkeypatch.setattr(
-        main,
-        "fetch_lmp_data",
-        lambda location, market, date: make_lmp_frame(
-            [100, 90, 20, 10, 12, 18, 50, 60, 80, 100, 95, 85]
-        ),
-    )
-    monkeypatch.setattr(main, "airtable_is_configured", lambda: True)
-    monkeypatch.setattr(main, "save_simulation_to_airtable", lambda result: "recSim")
-    monkeypatch.setattr(
-        main,
-        "find_asset_by_asset_id",
-        lambda asset_id: {"id": "recAsset", "fields": {"asset_id": asset_id}},
-    )
-    dispatch_attempts = []
-
-    def create_dispatch(*args):
-        dispatch_attempts.append(args)
-        if len(dispatch_attempts) == 1:
-            raise main.AirtableError("dispatch unavailable")
-        return {"id": "recDispatch"}
-
-    monkeypatch.setattr(main, "create_dispatch_event", create_dispatch)
-    pnl_dates = []
-    monkeypatch.setattr(main, "recalculate_daily_pnl", pnl_dates.append)
-    client = TestClient(main.app)
-
-    first = client.post(
-        "/simulate", json=simulation_payload(asset_id="BAT-001")
-    )
-    second = client.post(
-        "/simulate", json=simulation_payload(asset_id="BAT-001")
-    )
-
-    assert first.status_code == 200
-    assert second.status_code == 200
-    assert len(dispatch_attempts) == 2
-    assert pnl_dates == ["2025-04-01"]
-
-
-def test_post_simulate_returns_result_when_airtable_is_unavailable(
-    monkeypatch, caplog
-):
-    import main
-
-    monkeypatch.setattr(
-        main,
-        "fetch_lmp_data",
-        lambda location, market, date: make_lmp_frame(
-            [100, 90, 20, 10, 12, 18, 50, 60, 80, 100, 95, 85]
-        ),
-    )
-    monkeypatch.setattr(main, "airtable_is_configured", lambda: True)
-
-    def fail(_result):
-        raise main.AirtableError(
-            "Airtable record write failed: HTTP status=422; "
-            "error_type=UNKNOWN_FIELD_NAME; message=Unknown field name; "
-            'response_body={"error":{"type":"UNKNOWN_FIELD_NAME"}}'
+    def persist(request_fields, result, idempotency_key):
+        captured.update(
+            request_fields=request_fields,
+            result=result,
+            idempotency_key=idempotency_key,
         )
+        return {
+            "status": "saved",
+            "simulation_id": "sim-1",
+            "dispatch_id": None,
+            "error_code": None,
+            "message": "Simulation saved",
+        }
 
-    monkeypatch.setattr(main, "save_simulation_to_airtable", fail)
+    monkeypatch.setattr(main, "persist_simulation", persist)
+    response = TestClient(main.app).post(
+        "/simulate",
+        json=simulation_payload(),
+        headers={"Idempotency-Key": "retool-run-1"},
+    )
+
+    assert response.status_code == 200
+    assert captured["idempotency_key"] == "retool-run-1"
+    assert captured["request_fields"]["market"] == "RTM"
+    assert captured["result"]["estimated_net_margin"] == 2570
+    assert response.json()["persistence"]["status"] == "saved"
+
+
+def test_post_simulate_exposes_partial_supabase_failure(monkeypatch, caplog):
+    import main
+
     monkeypatch.setattr(
         main,
-        "find_asset_by_asset_id",
-        lambda asset_id: (_ for _ in ()).throw(AssertionError("unexpected lookup")),
+        "fetch_lmp_data",
+        lambda location, market, date: make_lmp_frame(
+            [100, 90, 20, 10, 12, 18, 50, 60, 80, 100, 95, 85]
+        ),
+    )
+    monkeypatch.setattr(
+        main,
+        "persist_simulation",
+        lambda *args: (_ for _ in ()).throw(
+            main.SupabaseError(
+                "Simulation saved, but dispatch creation failed",
+                error_code="failed_dispatch_creation",
+                operation="create_dispatch",
+                simulation_id="sim-1",
+            )
+        ),
     )
 
     response = TestClient(main.app).post(
@@ -441,10 +324,14 @@ def test_post_simulate_returns_result_when_airtable_is_unavailable(
 
     assert response.status_code == 200
     assert response.json()["estimated_net_margin"] == 2570
-    assert "Airtable operation failed" in caplog.text
-    assert "HTTP status=422" in caplog.text
-    assert "error_type=UNKNOWN_FIELD_NAME" in caplog.text
-    assert "response_body=" in caplog.text
+    assert response.json()["persistence"] == {
+        "status": "partial",
+        "simulation_id": "sim-1",
+        "dispatch_id": None,
+        "error_code": "failed_dispatch_creation",
+        "message": "Simulation saved, but dispatch creation failed",
+    }
+    assert "Supabase ledger persistence failed" in caplog.text
 
 
 def test_post_simulate_rejects_invalid_request_body():
@@ -535,9 +422,10 @@ def test_post_simulate_maps_caiso_429_to_structured_upstream_error(monkeypatch):
     }
 
 
-def test_health_endpoint_returns_service_metadata():
+def test_health_endpoint_returns_service_and_supabase_status(monkeypatch):
     import main
 
+    monkeypatch.setattr(main, "check_supabase_connectivity", lambda: "connected")
     response = TestClient(main.app).get("/health")
 
     assert response.status_code == 200
@@ -546,9 +434,25 @@ def test_health_endpoint_returns_service_metadata():
     assert body["service_name"] == "Only1 LMP API"
     assert body["api_version"] == "1.0.0"
     assert body["current_utc_timestamp"].endswith(("Z", "+00:00"))
+    assert body["supabase_connectivity_status"] == "connected"
 
 
-def test_portfolio_summary_endpoint_returns_airtable_metrics(monkeypatch):
+def test_health_endpoint_reports_degraded_when_supabase_is_not_configured(
+    monkeypatch,
+):
+    import main
+
+    monkeypatch.setattr(
+        main, "check_supabase_connectivity", lambda: "not_configured"
+    )
+
+    body = TestClient(main.app).get("/health").json()
+
+    assert body["status"] == "degraded"
+    assert body["supabase_connectivity_status"] == "not_configured"
+
+
+def test_portfolio_summary_endpoint_returns_supabase_metrics(monkeypatch):
     import main
 
     monkeypatch.setattr(
@@ -603,23 +507,190 @@ def test_portfolio_assets_endpoint_returns_asset_performance(monkeypatch):
     assert response.json()[0]["average_profit_per_dispatch"] == 575
 
 
-def test_portfolio_assets_endpoint_identifies_airtable_timeout(monkeypatch):
+def test_portfolio_assets_endpoint_identifies_supabase_timeout(monkeypatch):
     import main
 
     monkeypatch.setattr(
         main,
         "get_asset_performance",
-        lambda: (_ for _ in ()).throw(main.AirtableError("Airtable timed out")),
+        lambda: (_ for _ in ()).throw(
+            main.SupabaseError(
+                "Supabase timed out",
+                error_code="supabase_timeout",
+                status_code=504,
+            )
+        ),
     )
 
     response = TestClient(main.app).get("/portfolio/assets")
 
-    assert response.status_code == 502
+    assert response.status_code == 504
     assert response.json() == {
-        "error_code": "upstream_service_error",
-        "message": "Airtable timed out",
-        "upstream_service": "Airtable",
+        "error_code": "supabase_timeout",
+        "message": "Supabase timed out",
+        "upstream_service": "Supabase",
     }
+
+
+def test_asset_creation_returns_structured_duplicate_error(monkeypatch):
+    import main
+
+    monkeypatch.setattr(
+        main,
+        "create_asset",
+        lambda fields: (_ for _ in ()).throw(main.DuplicateAssetError("BAT-001")),
+    )
+
+    response = TestClient(main.app).post(
+        "/assets", json={"asset_id": "BAT-001", "asset_name": "Battery"}
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "error_code": "duplicate_asset",
+        "message": "Asset already exists: BAT-001",
+        "upstream_service": "Supabase",
+    }
+
+
+def test_asset_management_endpoints_use_supabase_service(monkeypatch):
+    import main
+
+    monkeypatch.setattr(
+        main,
+        "list_assets",
+        lambda limit, offset: [{"asset_id": "BAT-001", "asset_name": "Battery"}],
+    )
+    monkeypatch.setattr(
+        main,
+        "get_asset",
+        lambda asset_id: {"asset_id": asset_id, "asset_name": "Battery"},
+    )
+    monkeypatch.setattr(main, "create_asset", lambda fields: {"id": "asset-uuid", **fields})
+    monkeypatch.setattr(
+        main,
+        "update_asset",
+        lambda asset_id, fields: {"asset_id": asset_id, **fields},
+    )
+    client = TestClient(main.app)
+
+    assert client.get("/assets").json()[0]["asset_id"] == "BAT-001"
+    assert client.get("/assets/BAT-001").status_code == 200
+    created = client.post(
+        "/assets", json={"asset_id": "BAT-002", "asset_name": "Second"}
+    )
+    updated = client.patch("/assets/BAT-002", json={"status": "inactive"})
+
+    assert created.status_code == 201
+    assert created.json()["id"] == "asset-uuid"
+    assert updated.status_code == 200
+    assert updated.json()["status"] == "inactive"
+
+
+def test_asset_get_returns_structured_missing_error(monkeypatch):
+    import main
+
+    monkeypatch.setattr(main, "get_asset", lambda asset_id: None)
+
+    response = TestClient(main.app).get("/assets/MISSING")
+
+    assert response.status_code == 404
+    assert response.json()["error_code"] == "missing_asset"
+
+
+def test_dispatch_endpoint_forwards_filters_and_pagination(monkeypatch):
+    import main
+
+    captured = {}
+
+    def list_records(**kwargs):
+        captured.update(kwargs)
+        return [{"dispatch_id": "dispatch:one"}]
+
+    monkeypatch.setattr(main, "list_dispatch_events", list_records)
+    response = TestClient(main.app).get(
+        "/dispatch-events",
+        params={
+            "start_date": "2025-07-01",
+            "end_date": "2025-07-31",
+            "asset_id": "BAT-001",
+            "market": "RTM",
+            "location": "NP15",
+            "status": "completed",
+            "limit": 25,
+            "offset": 50,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()[0]["dispatch_id"] == "dispatch:one"
+    assert captured["asset_id"] == "BAT-001"
+    assert captured["limit"] == 25
+    assert captured["offset"] == 50
+
+
+def test_dispatch_csv_export_matches_filtered_records(monkeypatch):
+    import main
+
+    record = {
+        "id": "uuid-1",
+        "dispatch_id": "dispatch:one",
+        "asset_id": "asset-uuid",
+        "simulation_id": "simulation-uuid",
+        "dispatch_timestamp": "2025-07-18T01:00:00Z",
+        "market": "RTM",
+        "location": "NP15",
+        "status": "completed",
+        "energy_mwh": 40,
+        "charging_cost": 750,
+        "discharge_revenue": 3600,
+        "storage_cost": 280,
+        "net_profit": 2570,
+    }
+    captured = {}
+
+    def list_records(**kwargs):
+        captured.update(kwargs)
+        return [record]
+
+    monkeypatch.setattr(main, "list_dispatch_events", list_records)
+    response = TestClient(main.app).get(
+        "/dispatch-events/export.csv",
+        params={"market": "RTM", "start_date": "2025-07-18"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    rows = list(csv.DictReader(StringIO(response.text)))
+    assert rows[0]["dispatch_id"] == "dispatch:one"
+    assert rows[0]["net_profit"] == "2570"
+    assert captured["market"] == "RTM"
+    assert captured["limit"] is None
+
+
+def test_report_endpoint_returns_supabase_dispatch_aggregation(monkeypatch):
+    import main
+
+    monkeypatch.setattr(
+        main,
+        "aggregate_report",
+        lambda period, **kwargs: [{
+            "period_start": "2025-07-01",
+            "period_end": "2025-07-31",
+            "total_dispatches": 2,
+            "total_energy_mwh": 80,
+            "charging_cost": 1500,
+            "discharge_revenue": 7200,
+            "storage_cost": 560,
+            "net_profit": 5140,
+        }],
+    )
+
+    response = TestClient(main.app).get("/reports/monthly")
+
+    assert response.status_code == 200
+    assert response.json()[0]["period_start"] == "2025-07-01"
+    assert response.json()[0]["net_profit"] == 5140
 
 
 def test_cors_allows_only_configured_origins(monkeypatch):
@@ -647,6 +718,7 @@ def test_cors_allows_only_configured_origins(monkeypatch):
 
     assert allowed.status_code == 200
     assert allowed.headers["access-control-allow-origin"] == "https://only1.retool.com"
+    assert "PATCH" in allowed.headers["access-control-allow-methods"]
     assert "access-control-allow-origin" not in denied.headers
 
 
