@@ -97,6 +97,7 @@ Run a storage simulation from a JSON request. This is the preferred endpoint for
 ```bash
 curl -X POST "http://localhost:8000/simulate" \
   -H "Content-Type: application/json" \
+  -H "Idempotency-Key: retool-simulation-2025-04-01-bat-001" \
   -d '{
     "location": "TH_NP15_GEN-APND",
     "market": "RTM",
@@ -134,7 +135,14 @@ Sample response:
   "arbitrage": {"duration_hours": 4, "round_trip_efficiency": 0.8},
   "charging_window": {"start_timestamp": "2025-04-01T02:00:00+00:00", "end_timestamp": "2025-04-01T06:00:00+00:00", "average_price": 15, "prices": []},
   "discharging_window": {"start_timestamp": "2025-04-01T08:00:00+00:00", "end_timestamp": "2025-04-01T12:00:00+00:00", "average_price": 90, "prices": []},
-  "assumptions": {}
+  "assumptions": {},
+  "persistence": {
+    "status": "saved",
+    "simulation_id": "123e4567-e89b-52d3-a456-426614174000",
+    "dispatch_id": null,
+    "error_code": null,
+    "message": "Simulation saved; no asset_id was supplied"
+  }
 }
 ```
 
@@ -225,7 +233,8 @@ curl "http://localhost:8000/health"
   "status": "ok",
   "service_name": "Only1 LMP API",
   "api_version": "1.0.0",
-  "current_utc_timestamp": "2026-07-12T20:00:00Z"
+  "current_utc_timestamp": "2026-07-12T20:00:00Z",
+  "supabase_connectivity_status": "connected"
 }
 ```
 
@@ -236,6 +245,8 @@ curl "http://localhost:8000/health"
 3. Test the resource with `GET /health`.
 4. Create a POST query for `/simulate`, select a JSON body, and map Retool component values to the request fields shown above.
 5. Display successful query data directly; for failures, read `error_code`, `message`, and `field` or `upstream_service` from the response body.
+
+The existing Retool simulation and asset-performance queries remain compatible with `POST /simulate` and `GET /portfolio/assets`. Use `/assets` for asset management, `/dispatch-events` for the ledger, `/reports/*` for period reporting, and `/dispatch-events/export.csv` for downloads. No Retool frontend changes are included here.
 
 For browser-based Retool requests, add the exact Retool origin to `ALLOWED_ORIGINS` in the API deployment environment. Retool-hosted origins commonly follow `https://YOUR-ORG.retool.com`; custom Retool domains must be listed explicitly.
 
@@ -249,77 +260,40 @@ ALLOWED_ORIGINS=https://your-org.retool.com,https://dashboard.only1power.com
 
 Copy `.env.example` as a deployment reference, but configure the actual value through the hosting provider. Origins must include the scheme and must not include a trailing path. Never put secrets in `.env.example` or commit a populated `.env` file.
 
-## Optional Airtable Simulation Archive
+## Supabase PostgreSQL Ledger
 
-Successful `POST /simulate` requests can create one Airtable record for reporting and historical analysis. Airtable is optional: when its configuration is missing, no write is attempted. If a configured Airtable request fails, the API logs the error and still returns the completed simulation response.
-
-Create an Airtable personal access token with `data.records:write` scope and access to the target base, then configure these deployment environment variables:
+Supabase PostgreSQL is the only production system of record. The API never reads from or writes to Airtable. Configure both required variables in Render:
 
 ```bash
-AIRTABLE_API_KEY=pat_your_personal_access_token
-AIRTABLE_BASE_ID=app_your_base_id
-AIRTABLE_SIMULATIONS_TABLE=Simulation Results
-AIRTABLE_ASSETS_TABLE=Assets
-AIRTABLE_DISPATCH_EVENTS_TABLE=Dispatch Events
-AIRTABLE_DAILY_PNL_TABLE=Daily P&L
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
 ```
 
-`AIRTABLE_TABLE_NAME` remains supported as a legacy fallback for `AIRTABLE_SIMULATIONS_TABLE`. The four table-specific variables default to the exact table names shown above, but explicitly setting them is recommended for production. `AIRTABLE_ASSET_SUMMARY_TABLE` was removed because the API does not read or write that table.
+Keep the service-role key in Render's secret manager. It must never be sent to Retool, logged, committed, or placed in browser code. Missing configuration produces a degraded health status and structured request-time errors.
 
-The target table must contain all 16 field names below exactly as written. Airtable field names are case-sensitive for API writes.
+Apply [`supabase/migrations/202607130001_supabase_system_of_record.sql`](supabase/migrations/202607130001_supabase_system_of_record.sql) before deploying the API. The migration defines:
 
-| Exact Airtable field | Recommended Airtable type |
-| --- | --- |
-| `timestamp` | Date, with time enabled |
-| `location` | Single line text |
-| `market` | Single line text |
-| `date` | Date |
-| `power_mw` | Number |
-| `duration_hours` | Number |
-| `round_trip_efficiency` | Number or Percent |
-| `cycles` | Number |
-| `charging_cost` | Currency or Number |
-| `discharge_revenue` | Currency or Number |
-| `gross_arbitrage_margin` | Currency or Number |
-| `estimated_net_margin` | Currency or Number |
-| `charging_window_start` | Date, with time enabled |
-| `charging_window_end` | Date, with time enabled |
-| `discharging_window_start` | Date, with time enabled |
-| `discharging_window_end` | Date, with time enabled |
+- `assets`, keyed by UUID with a unique business `asset_id`.
+- `simulation_results`, keyed by UUID with a unique `idempotency_key` and optional foreign key to `assets`.
+- `dispatch_events`, keyed by UUID with a unique deterministic `dispatch_id` and required foreign keys to both authoritative parent tables.
+- Numeric ledger columns, UTC timestamps, stable query indexes, and an `updated_at` trigger for assets.
+- Row-level security on all ledger tables; the Render backend uses the service role, while browser clients receive no database credentials.
 
-The create-record request uses `{"fields": { ... }, "typecast": true}`. Typecasting lets Airtable perform best-effort conversion for compatible field types, but it does not create missing fields or correct differently named fields. A 422 response now logs the HTTP status, Airtable response body, Airtable error type, and Airtable error message without logging the API token.
+After applying the migration, run the read-only verification script:
 
-The table name is URL-encoded by the service, so spaces such as `Simulation Results` are supported.
+```bash
+python scripts/verify_supabase_migration.py
+```
 
-### Portfolio table fields
+It validates required tables and columns, counts assets/simulations/dispatches, and reports orphaned dispatches or duplicate dispatch IDs without deleting data.
 
-The portfolio ledger expects these exact, case-sensitive fields:
+### Simulation persistence and idempotency
 
-| Table | Required fields |
-| --- | --- |
-| `Simulation Results` | `timestamp`, `location`, `market`, `date`, `power_mw`, `duration_hours`, `round_trip_efficiency`, `cycles`, `charging_cost`, `discharge_revenue`, `gross_arbitrage_margin`, `estimated_net_margin`, `charging_window_start`, `charging_window_end`, `discharging_window_start`, `discharging_window_end` |
-| `Assets` | `asset_id`, `asset_name`, `technology`, `power_mw`, `energy_mwh`, `duration_hours`, `location`, `lease_cost_monthly`, `status` |
-| `Dispatch Events` | `dispatch_id`, `asset_id`, `simulation`, `charge_start`, `charge_end`, `discharge_start`, `discharge_end`, `charging_cost`, `discharge_revenue`, `estimated_profit` |
-| `Daily P&L` | `date`, `gross_revenue`, `charging_cost`, `storage_cost`, `net_profit` |
+Every successful `POST /simulate` attempts to insert a `simulation_results` record. If the optional business `asset_id` exists, the API links the simulation to that asset and atomically upserts one `dispatch_events` record using `dispatch:<simulation_uuid>` as the unique dispatch ID. Missing assets never create fake records.
 
-`Dispatch Events.asset_id` must be a linked-record field targeting `Assets`, and `Dispatch Events.simulation` must be a linked-record field targeting `Simulation Results`. The API sends Airtable record-ID arrays such as `{"asset_id": ["recAsset"], "simulation": ["recSimulation"]}` and never writes business IDs into these linked fields. Use Number/Currency types for financial and capacity fields and Date types for date/time fields so Airtable can aggregate and sort them correctly.
+Clients may send an `Idempotency-Key` header. Reusing a key with the same request reuses the same simulation UUID and dispatch; reusing it for different input returns an idempotency conflict in the persistence result. Without the header, the API derives a stable key from the complete request and calculated result, so an identical HTTP retry cannot create another dispatch.
 
-### Simulation-to-dispatch flow
-
-`POST /simulate` accepts an optional business `asset_id`. The failure-tolerant ledger workflow runs in this order:
-
-1. Archive the completed simulation and retain its Airtable record ID.
-2. Look up the existing asset; never create one automatically.
-3. Find or create the deterministic dispatch record linked to both Airtable records.
-4. Only after the dispatch exists, recalculate the day's Daily P&L from Dispatch Events.
-
-Dispatch Events is the authoritative financial ledger. Daily P&L is derived rather than incremented from the incoming request: revenue sums `discharge_revenue`, charging cost sums `charging_cost`, net profit sums `estimated_profit`, and storage cost is derived as `discharge_revenue - charging_cost - estimated_profit`. Dispatches are grouped by the ISO date prefix stored in `charge_start`.
-
-Dispatch idempotency uses `dispatch:<simulation_record_id>` as the deterministic `dispatch_id`. A ledger retry for the same archived Simulation Results record queries this ID first and reuses an existing row, so it does not intentionally create another dispatch. Daily P&L recalculation overwrites exact ledger-derived totals, so repeating it does not double-count. Retrying the entire HTTP simulation creates a new Simulation Results record and is therefore a distinct ledger event. Duplicate Daily P&L rows are treated as an integrity error and are not updated.
-
-Each Airtable step is failure-tolerant. Archive, asset lookup, or dispatch failure stops downstream ledger updates and logs redacted details, while the completed simulation still returns normally. No Dispatch Events or Daily P&L record is created when `asset_id` is omitted or not found.
-
-Because Airtable does not provide transactions or uniqueness constraints, two truly concurrent workers can still both pass the dispatch/date lookup before either creates its row, and concurrent Daily P&L recalculations can race. Use a single API worker or external serialization for strict cross-worker guarantees, and monitor integrity-error logs for duplicates.
+Persistence status is included in the POST response. A completed calculation still returns when Supabase persistence fails, but `persistence.status`, `error_code`, and `message` clearly report whether the simulation or dispatch write failed. Failures are also logged without credentials.
 
 Example request with an asset link:
 
@@ -340,7 +314,7 @@ Example request with an asset link:
 
 ### `GET /portfolio/summary`
 
-Returns portfolio-wide counts from Assets, Simulation Results, and Dispatch Events, plus cumulative totals from Daily P&L:
+Returns portfolio-wide counts and financial totals calculated directly from Supabase `assets`, `simulation_results`, and `dispatch_events`:
 
 ```json
 {
@@ -355,11 +329,11 @@ Returns portfolio-wide counts from Assets, Simulation Results, and Dispatch Even
 }
 ```
 
-The endpoint returns a structured `502` identifying Airtable if summary data cannot be retrieved.
+The endpoint returns a structured error identifying Supabase when ledger data cannot be retrieved.
 
 ### `GET /portfolio/assets`
 
-Returns one performance object for every record in `Assets`, including assets with no dispatch history. Metrics are calculated at request time from the paginated `Dispatch Events` table; the Airtable `Asset Summary` table is not read or written.
+Returns one performance object for every Supabase asset, including assets with no dispatch history. Metrics are calculated from paginated `dispatch_events` rows linked by the asset UUID.
 
 ```json
 [
@@ -381,9 +355,34 @@ Returns one performance object for every record in `Assets`, including assets wi
 ]
 ```
 
-Dispatches are matched only through Airtable record IDs in the `Dispatch Events.asset_id` linked-record array. Plain business asset IDs are not treated as links. `last_dispatch_time` is the latest valid `discharge_end` timestamp for the asset, or `null` when no valid timestamp exists. Missing or malformed numeric fields contribute `0` and are logged without exposing credentials. Airtable timeouts and other upstream failures return a structured `502` identifying Airtable.
+`last_dispatch_time` is the latest valid `discharge_end` timestamp, or `null`. Malformed numeric values contribute `0` to read-time aggregates and are logged safely.
 
-Keep the personal access token in the deployment provider's secret manager. Do not expose it in Retool, commit it to Git, or add it to `.env.example`.
+### Asset management
+
+- `GET /assets?limit=100&offset=0`
+- `GET /assets/{asset_id}`
+- `POST /assets`
+- `PATCH /assets/{asset_id}`
+
+Duplicate business asset IDs return a structured `409 duplicate_asset`; missing assets return `404 missing_asset`.
+
+### Dispatch ledger and exports
+
+`GET /dispatch-events` accepts `start_date`, `end_date`, `asset_id`, `market`, `location`, `status`, `limit`, and `offset`. Results use stable `dispatch_timestamp,id` ordering.
+
+`GET /dispatch-events/export.csv` accepts the same business filters and exports every matching row as CSV. Retool can use this endpoint for daily, weekly, monthly, quarterly, or yearly downloads.
+
+### Reports
+
+These endpoints aggregate authoritative Supabase dispatch rows and return period boundaries, dispatch count, energy MWh, charging cost, discharge revenue, storage cost, and net profit:
+
+- `GET /reports/daily`
+- `GET /reports/weekly`
+- `GET /reports/monthly`
+- `GET /reports/quarterly`
+- `GET /reports/yearly`
+
+All accept optional `start_date` and `end_date`. No cached P&L table is used.
 
 ## OpenAPI Documentation
 
@@ -394,6 +393,7 @@ With the API running, use interactive Swagger documentation at `http://localhost
 - CORS restricts browser origins; it is not authentication or authorization.
 - This API is intentionally unauthenticated. Deploy it behind an appropriate private network, gateway, or access control before exposing sensitive workflows publicly.
 - Do not place secrets, API keys, credentials, or Retool tokens in request bodies, source control, `.env.example`, or client-side Retool JavaScript.
+- Never expose `SUPABASE_SERVICE_ROLE_KEY` to Retool or any browser client.
 - Treat simulation output as historical analysis, not a live dispatch or trading instruction.
 
 ## Formula Assumptions
@@ -486,12 +486,14 @@ http://localhost:8000/docs
 
 - Confirm the deployed Git SHA matches the latest `main` commit and the working tree is clean before release.
 - Confirm Render uses Python 3.12 (matching `.python-version`), installs `requirements.txt`, and starts Uvicorn with `uvicorn main:app --host 0.0.0.0 --port $PORT` or an equivalent command.
-- Confirm Render defines `ALLOWED_ORIGINS`, `AIRTABLE_API_KEY`, `AIRTABLE_BASE_ID`, and `AIRTABLE_TABLE_NAME`. Keep the Airtable token in Render secrets, never in source control or Retool.
-- Confirm `GET /health` and `GET /` return HTTP 200 from the production URL.
-- Run a dated `POST /simulate` with a known CAISO node and confirm HTTP 200, plausible simulation output, and a corresponding new Airtable record containing all 16 documented fields.
+- Apply the committed Supabase migration and run `python scripts/verify_supabase_migration.py` before switching production traffic.
+- Remove all legacy Airtable credentials, table-name settings, and archive flags from Render.
+- Add `SUPABASE_URL` and secret `SUPABASE_SERVICE_ROLE_KEY` to Render, then redeploy.
+- Confirm `GET /health` reports `supabase_connectivity_status: connected` and `status: ok`; confirm `GET /` returns HTTP 200.
+- Run a dated `POST /simulate` with a known CAISO node and confirm HTTP 200, plausible output, `persistence.status: saved`, and linked Supabase simulation/dispatch rows.
 - Confirm Retool's REST resource base URL points to the current Render service and its simulation query sends JSON to `POST /simulate`.
-- Confirm Airtable field names exactly match the documented lowercase names and use appropriate date, number, currency, and text types.
-- Confirm CAISO rate limits return a structured 502 response identifying `CAISO OASIS`, while Airtable 403, 422, and timeout failures are logged without failing a completed simulation or exposing the token.
+- Confirm asset CRUD, dispatch filters, reports, CSV export, and `GET /portfolio/assets` return Supabase-backed data.
+- Confirm CAISO rate limits return a structured 502 response identifying `CAISO OASIS`, while Supabase failures remain visible without suppressing a completed calculation or exposing the service-role key.
 - Confirm the latest GitHub Actions run passes on Python 3.11 and 3.12.
 
 ## License

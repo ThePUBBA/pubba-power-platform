@@ -425,7 +425,7 @@ def main():
     multi_prices = save_multi_prices(all_prices, reports_dir, th, run_ts, args.auto_refresh_sec)
     print(f"Saved multi-node prices chart: {multi_prices}")
 
-    # Summary CSV for Airtable / dashboards (includes run_ts)
+    # Summary CSV for downstream dashboards (includes run_ts)
     import csv
     summary_path = reports_dir / "last_run_summary.csv"
     with open(summary_path, "w", newline="") as f:

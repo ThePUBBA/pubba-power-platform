@@ -1,27 +1,34 @@
 from __future__ import annotations
 
-import os
+import csv
+import io
 import logging
-from datetime import datetime, timezone
+import os
+from datetime import date, datetime, timezone
 from typing import Optional
 
-from fastapi import FastAPI, Query, Request
+from fastapi import FastAPI, Header, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from arbitrage import ArbitrageAnalysisError, analyze_lmp_arbitrage
-from airtable import (
-    AirtableError,
-    airtable_is_configured,
-    create_dispatch_event,
-    find_asset_by_asset_id,
+from supabase import (
+    DuplicateAssetError,
+    SupabaseError,
+    aggregate_report,
+    check_supabase_connectivity,
+    create_asset,
+    derive_idempotency_key,
     get_asset_performance,
+    get_asset,
     get_portfolio_summary,
-    recalculate_daily_pnl,
-    save_simulation_to_airtable,
+    list_assets,
+    list_dispatch_events,
+    persist_simulation,
+    update_asset,
 )
 from caiso import CaisoOasisError, fetch_lmp_data
 from simulation import StorageSimulationError, simulate_storage_profit
@@ -94,6 +101,15 @@ class SimulationResponse(BaseModel):
     charging_window: PriceWindowResponse
     discharging_window: PriceWindowResponse
     assumptions: dict[str, str]
+    persistence: Optional["PersistenceResponse"] = None
+
+
+class PersistenceResponse(BaseModel):
+    status: str
+    simulation_id: Optional[str] = None
+    dispatch_id: Optional[str] = None
+    error_code: Optional[str] = None
+    message: str
 
 
 class HealthResponse(BaseModel):
@@ -101,6 +117,7 @@ class HealthResponse(BaseModel):
     service_name: str
     api_version: str
     current_utc_timestamp: datetime
+    supabase_connectivity_status: str
 
 
 class PortfolioSummaryResponse(BaseModel):
@@ -128,6 +145,40 @@ class AssetPerformanceResponse(BaseModel):
     total_profit: float
     average_profit_per_dispatch: float
     last_dispatch_time: Optional[str] = None
+
+
+class AssetCreateRequest(BaseModel):
+    asset_id: str = Field(min_length=1)
+    asset_name: str = Field(min_length=1)
+    technology: Optional[str] = None
+    power_mw: float = Field(default=0, ge=0)
+    energy_mwh: float = Field(default=0, ge=0)
+    duration_hours: float = Field(default=0, ge=0)
+    location: Optional[str] = None
+    lease_cost_monthly: float = Field(default=0, ge=0)
+    status: str = "active"
+
+
+class AssetUpdateRequest(BaseModel):
+    asset_name: Optional[str] = Field(default=None, min_length=1)
+    technology: Optional[str] = None
+    power_mw: Optional[float] = Field(default=None, ge=0)
+    energy_mwh: Optional[float] = Field(default=None, ge=0)
+    duration_hours: Optional[float] = Field(default=None, ge=0)
+    location: Optional[str] = None
+    lease_cost_monthly: Optional[float] = Field(default=None, ge=0)
+    status: Optional[str] = None
+
+
+class ReportPeriodResponse(BaseModel):
+    period_start: str
+    period_end: str
+    total_dispatches: int
+    total_energy_mwh: float
+    charging_cost: float
+    discharge_revenue: float
+    storage_cost: float
+    net_profit: float
 
 
 class ApiError(Exception):
@@ -198,63 +249,51 @@ def _run_simulation(request: SimulationRequest) -> dict:
         raise ApiError(400, "simulation_error", str(exc), field=field) from exc
 
 
-def _archive_simulation(request: SimulationRequest, result: dict) -> None:
-    airtable_result = {
-        **result,
-        "location": request.location,
-        "market": request.market,
-        "date": request.date,
-    }
-    simulation_record_id = None
+def _persist_completed_simulation(
+    request: SimulationRequest,
+    result: dict,
+    idempotency_key: str,
+) -> dict:
     try:
-        simulation_record_id = save_simulation_to_airtable(airtable_result)
-    except AirtableError:
+        return persist_simulation(
+            request.model_dump(),
+            result,
+            idempotency_key,
+        )
+    except SupabaseError as exc:
         logger.exception(
-            "Airtable operation failed",
-            extra={"airtable_operation": "archive_simulation"},
+            "Supabase ledger persistence failed",
+            extra={
+                "supabase_operation": exc.operation or "persist_simulation",
+                "error_code": exc.error_code,
+                "simulation_id": exc.simulation_id,
+            },
         )
-        return
+        return {
+            "status": "partial" if exc.simulation_id else "failed",
+            "simulation_id": exc.simulation_id,
+            "dispatch_id": None,
+            "error_code": exc.error_code,
+            "message": str(exc),
+        }
 
-    if not simulation_record_id:
-        logger.error(
-            "Airtable simulation archive returned no record ID; skipping ledger updates",
-            extra={"airtable_operation": "archive_simulation"},
-        )
-        return
 
-    if not request.asset_id:
-        return
-    try:
-        asset = find_asset_by_asset_id(request.asset_id)
-    except AirtableError:
-        logger.exception(
-            "Airtable operation failed",
-            extra={"airtable_operation": "find_asset", "asset_id": request.asset_id},
-        )
-        return
-    if not asset:
-        logger.warning(
-            "Airtable asset not found; skipping portfolio ledger updates",
-            extra={"airtable_operation": "find_asset", "asset_id": request.asset_id},
-        )
-        return
+def _raise_supabase_api_error(exc: SupabaseError) -> None:
+    raise ApiError(
+        exc.status_code,
+        exc.error_code,
+        str(exc),
+        upstream_service="Supabase",
+    ) from exc
 
-    try:
-        create_dispatch_event(asset, airtable_result, simulation_record_id)
-    except AirtableError:
-        logger.exception(
-            "Airtable operation failed",
-            extra={"airtable_operation": "create_dispatch", "asset_id": request.asset_id},
-        )
-        return
 
-    pnl_date = airtable_result["charging_window"]["start_timestamp"][:10]
-    try:
-        recalculate_daily_pnl(pnl_date)
-    except AirtableError:
-        logger.exception(
-            "Airtable operation failed",
-            extra={"airtable_operation": "update_daily_pnl", "asset_id": request.asset_id},
+def _validate_date_range(start_date: date | None, end_date: date | None) -> None:
+    if start_date and end_date and start_date > end_date:
+        raise ApiError(
+            400,
+            "invalid_date_range",
+            "start_date must be on or before end_date",
+            field="start_date",
         )
 
 
@@ -266,7 +305,7 @@ def create_app() -> FastAPI:
             CORSMiddleware,
             allow_origins=origins,
             allow_credentials=True,
-            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
             allow_headers=["*"],
         )
 
@@ -305,36 +344,188 @@ def create_app() -> FastAPI:
 
     @app.get("/health", response_model=HealthResponse)
     def health():
+        supabase_status = check_supabase_connectivity()
         return {
-            "status": "ok",
+            "status": "ok" if supabase_status == "connected" else "degraded",
             "service_name": SERVICE_NAME,
             "api_version": API_VERSION,
             "current_utc_timestamp": datetime.now(timezone.utc),
+            "supabase_connectivity_status": supabase_status,
         }
 
     @app.get("/portfolio/summary", response_model=PortfolioSummaryResponse)
     def portfolio_summary():
         try:
             return get_portfolio_summary()
-        except AirtableError as exc:
-            raise ApiError(
-                502,
-                "upstream_service_error",
-                str(exc),
-                upstream_service="Airtable",
-            ) from exc
+        except SupabaseError as exc:
+            _raise_supabase_api_error(exc)
 
     @app.get("/portfolio/assets", response_model=list[AssetPerformanceResponse])
     def portfolio_assets():
         try:
             return get_asset_performance()
-        except AirtableError as exc:
+        except SupabaseError as exc:
+            _raise_supabase_api_error(exc)
+
+    @app.get("/assets")
+    def assets(
+        limit: int = Query(default=100, ge=1, le=1000),
+        offset: int = Query(default=0, ge=0),
+    ):
+        try:
+            return list_assets(limit=limit, offset=offset)
+        except SupabaseError as exc:
+            _raise_supabase_api_error(exc)
+
+    @app.get("/assets/{asset_id}")
+    def asset(asset_id: str):
+        try:
+            record = get_asset(asset_id)
+        except SupabaseError as exc:
+            _raise_supabase_api_error(exc)
+        if not record:
+            raise ApiError(404, "missing_asset", f"Asset not found: {asset_id}")
+        return record
+
+    @app.post("/assets", status_code=201)
+    def add_asset(request: AssetCreateRequest):
+        try:
+            return create_asset(request.model_dump())
+        except SupabaseError as exc:
+            _raise_supabase_api_error(exc)
+
+    @app.patch("/assets/{asset_id}")
+    def patch_asset(asset_id: str, request: AssetUpdateRequest):
+        fields = request.model_dump(exclude_unset=True)
+        if not fields:
             raise ApiError(
-                502,
-                "upstream_service_error",
-                str(exc),
-                upstream_service="Airtable",
-            ) from exc
+                400,
+                "invalid_request",
+                "At least one asset field must be provided",
+            )
+        try:
+            return update_asset(asset_id, fields)
+        except SupabaseError as exc:
+            _raise_supabase_api_error(exc)
+
+    @app.get("/dispatch-events")
+    def dispatch_events(
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        asset_id: Optional[str] = None,
+        market: Optional[str] = None,
+        location: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = Query(default=100, ge=1, le=1000),
+        offset: int = Query(default=0, ge=0),
+    ):
+        _validate_date_range(start_date, end_date)
+        try:
+            return list_dispatch_events(
+                start_date=start_date,
+                end_date=end_date,
+                asset_id=asset_id,
+                market=market,
+                location=location,
+                status=status,
+                limit=limit,
+                offset=offset,
+            )
+        except SupabaseError as exc:
+            _raise_supabase_api_error(exc)
+
+    @app.get("/dispatch-events/export.csv")
+    def export_dispatch_events(
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        asset_id: Optional[str] = None,
+        market: Optional[str] = None,
+        location: Optional[str] = None,
+        status: Optional[str] = None,
+    ):
+        _validate_date_range(start_date, end_date)
+        try:
+            records = list_dispatch_events(
+                start_date=start_date,
+                end_date=end_date,
+                asset_id=asset_id,
+                market=market,
+                location=location,
+                status=status,
+                limit=None,
+            )
+        except SupabaseError as exc:
+            _raise_supabase_api_error(exc)
+        fieldnames = [
+            "id",
+            "dispatch_id",
+            "asset_id",
+            "simulation_id",
+            "dispatch_timestamp",
+            "charge_start",
+            "charge_end",
+            "discharge_start",
+            "discharge_end",
+            "market",
+            "location",
+            "status",
+            "energy_mwh",
+            "charging_cost",
+            "discharge_revenue",
+            "storage_cost",
+            "net_profit",
+            "created_at",
+        ]
+        output = io.StringIO(newline="")
+        writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(records)
+        return Response(
+            output.getvalue(),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": "attachment; filename=dispatch-events.csv"
+            },
+        )
+
+    def report(period: str, start_date: date | None, end_date: date | None):
+        _validate_date_range(start_date, end_date)
+        try:
+            return aggregate_report(
+                period, start_date=start_date, end_date=end_date
+            )
+        except SupabaseError as exc:
+            _raise_supabase_api_error(exc)
+
+    @app.get("/reports/daily", response_model=list[ReportPeriodResponse])
+    def daily_report(
+        start_date: Optional[date] = None, end_date: Optional[date] = None
+    ):
+        return report("daily", start_date, end_date)
+
+    @app.get("/reports/weekly", response_model=list[ReportPeriodResponse])
+    def weekly_report(
+        start_date: Optional[date] = None, end_date: Optional[date] = None
+    ):
+        return report("weekly", start_date, end_date)
+
+    @app.get("/reports/monthly", response_model=list[ReportPeriodResponse])
+    def monthly_report(
+        start_date: Optional[date] = None, end_date: Optional[date] = None
+    ):
+        return report("monthly", start_date, end_date)
+
+    @app.get("/reports/quarterly", response_model=list[ReportPeriodResponse])
+    def quarterly_report(
+        start_date: Optional[date] = None, end_date: Optional[date] = None
+    ):
+        return report("quarterly", start_date, end_date)
+
+    @app.get("/reports/yearly", response_model=list[ReportPeriodResponse])
+    def yearly_report(
+        start_date: Optional[date] = None, end_date: Optional[date] = None
+    ):
+        return report("yearly", start_date, end_date)
 
     @app.get("/lmp")
     def get_lmp(
@@ -372,7 +563,11 @@ def create_app() -> FastAPI:
             raise ApiError(400, "arbitrage_error", str(exc), field=field) from exc
         return jsonable_encoder(result)
 
-    @app.get("/simulate", response_model=SimulationResponse)
+    @app.get(
+        "/simulate",
+        response_model=SimulationResponse,
+        response_model_exclude_none=True,
+    )
     def get_simulation(
         power_mw: float = Query(gt=0),
         market: str = "RTM",
@@ -399,11 +594,18 @@ def create_app() -> FastAPI:
         )
 
     @app.post("/simulate", response_model=SimulationResponse)
-    def post_simulation(request: SimulationRequest):
+    def post_simulation(
+        request: SimulationRequest,
+        idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+    ):
         result = _run_simulation(request)
-        if airtable_is_configured():
-            _archive_simulation(request, result)
-        return result
+        persistence = _persist_completed_simulation(
+            request,
+            result,
+            idempotency_key
+            or derive_idempotency_key(request.model_dump(), result),
+        )
+        return {**result, "persistence": persistence}
 
     return app
 
