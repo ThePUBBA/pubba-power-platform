@@ -1,4 +1,5 @@
 -- Only1 Power authoritative Supabase ledger.
+-- Preserves the live schema's text asset_id foreign keys and existing data.
 -- Safe to rerun: tables, columns, constraints, and indexes are guarded.
 
 create extension if not exists pgcrypto;
@@ -8,154 +9,151 @@ create table if not exists public.assets (
     asset_id text not null,
     asset_name text not null,
     technology text,
-    power_mw numeric(18, 6) not null default 0,
-    energy_mwh numeric(18, 6) not null default 0,
-    duration_hours numeric(18, 6) not null default 0,
+    power_mw numeric,
+    energy_mwh numeric,
+    duration_hours numeric,
     location text,
-    lease_cost_monthly numeric(18, 2) not null default 0,
-    status text not null default 'active',
-    created_at timestamptz not null default now(),
-    updated_at timestamptz not null default now()
+    lease_cost_monthly numeric default 0,
+    status text default 'Available',
+    created_at timestamptz default now(),
+    updated_at timestamptz default now()
 );
 
 create table if not exists public.simulation_results (
     id uuid primary key default gen_random_uuid(),
-    idempotency_key text not null,
-    request_hash text not null,
-    asset_id uuid,
+    external_simulation_id text not null,
+    request_hash text,
+    asset_id text,
     location text not null,
     market text not null,
-    simulation_date date,
-    power_mw numeric(18, 6) not null,
-    duration_hours numeric(18, 6) not null,
-    round_trip_efficiency numeric(18, 8) not null,
-    cycles numeric(18, 6) not null,
-    charging_cost numeric(18, 2) not null,
-    discharge_revenue numeric(18, 2) not null,
-    storage_cost numeric(18, 2) not null,
-    net_profit numeric(18, 2) not null,
-    result_json jsonb not null,
-    created_at timestamptz not null default now()
+    simulation_date date not null,
+    power_mw numeric not null,
+    duration_hours numeric not null,
+    round_trip_efficiency numeric not null,
+    cycles numeric not null,
+    storage_fee_per_mwh numeric default 0,
+    variable_om_per_mwh numeric default 0,
+    charging_cost numeric,
+    discharge_revenue numeric,
+    gross_arbitrage_margin numeric,
+    estimated_net_margin numeric,
+    charging_window_start timestamptz,
+    charging_window_end timestamptz,
+    discharging_window_start timestamptz,
+    discharging_window_end timestamptz,
+    created_at timestamptz default now()
 );
 
 create table if not exists public.dispatch_events (
     id uuid primary key default gen_random_uuid(),
     dispatch_id text not null,
-    asset_id uuid not null,
-    simulation_id uuid not null,
+    simulation_id uuid,
+    asset_id text,
+    market text,
+    location text,
+    action text default 'discharge',
     dispatch_timestamp timestamptz not null,
-    charge_start timestamptz not null,
-    charge_end timestamptz not null,
-    discharge_start timestamptz not null,
-    discharge_end timestamptz not null,
-    market text not null,
-    location text not null,
-    status text not null default 'completed',
-    energy_mwh numeric(18, 6) not null,
-    charging_cost numeric(18, 2) not null,
-    discharge_revenue numeric(18, 2) not null,
-    storage_cost numeric(18, 2) not null,
-    net_profit numeric(18, 2) not null,
-    created_at timestamptz not null default now()
+    charge_start timestamptz,
+    charge_end timestamptz,
+    discharge_start timestamptz,
+    discharge_end timestamptz,
+    power_mw numeric,
+    energy_mwh numeric,
+    charging_cost numeric default 0,
+    discharge_revenue numeric default 0,
+    storage_cost numeric default 0,
+    net_profit numeric default 0,
+    status text default 'simulated',
+    created_at timestamptz default now()
 );
 
 alter table public.assets add column if not exists id uuid default gen_random_uuid();
 alter table public.assets add column if not exists asset_id text;
 alter table public.assets add column if not exists asset_name text;
 alter table public.assets add column if not exists technology text;
-alter table public.assets add column if not exists power_mw numeric(18, 6) default 0;
-alter table public.assets add column if not exists energy_mwh numeric(18, 6) default 0;
-alter table public.assets add column if not exists duration_hours numeric(18, 6) default 0;
+alter table public.assets add column if not exists power_mw numeric;
+alter table public.assets add column if not exists energy_mwh numeric;
+alter table public.assets add column if not exists duration_hours numeric;
 alter table public.assets add column if not exists location text;
-alter table public.assets add column if not exists lease_cost_monthly numeric(18, 2) default 0;
-alter table public.assets add column if not exists status text default 'active';
+alter table public.assets add column if not exists lease_cost_monthly numeric default 0;
+alter table public.assets add column if not exists status text default 'Available';
 alter table public.assets add column if not exists created_at timestamptz default now();
 alter table public.assets add column if not exists updated_at timestamptz default now();
 
 alter table public.simulation_results add column if not exists id uuid default gen_random_uuid();
-alter table public.simulation_results add column if not exists idempotency_key text;
+alter table public.simulation_results add column if not exists external_simulation_id text;
 alter table public.simulation_results add column if not exists request_hash text;
-alter table public.simulation_results add column if not exists asset_id uuid;
+alter table public.simulation_results add column if not exists asset_id text;
 alter table public.simulation_results add column if not exists location text;
 alter table public.simulation_results add column if not exists market text;
 alter table public.simulation_results add column if not exists simulation_date date;
-alter table public.simulation_results add column if not exists power_mw numeric(18, 6);
-alter table public.simulation_results add column if not exists duration_hours numeric(18, 6);
-alter table public.simulation_results add column if not exists round_trip_efficiency numeric(18, 8);
-alter table public.simulation_results add column if not exists cycles numeric(18, 6);
-alter table public.simulation_results add column if not exists charging_cost numeric(18, 2);
-alter table public.simulation_results add column if not exists discharge_revenue numeric(18, 2);
-alter table public.simulation_results add column if not exists storage_cost numeric(18, 2);
-alter table public.simulation_results add column if not exists net_profit numeric(18, 2);
-alter table public.simulation_results add column if not exists result_json jsonb;
+alter table public.simulation_results add column if not exists power_mw numeric;
+alter table public.simulation_results add column if not exists duration_hours numeric;
+alter table public.simulation_results add column if not exists round_trip_efficiency numeric;
+alter table public.simulation_results add column if not exists cycles numeric;
+alter table public.simulation_results add column if not exists storage_fee_per_mwh numeric default 0;
+alter table public.simulation_results add column if not exists variable_om_per_mwh numeric default 0;
+alter table public.simulation_results add column if not exists charging_cost numeric;
+alter table public.simulation_results add column if not exists discharge_revenue numeric;
+alter table public.simulation_results add column if not exists gross_arbitrage_margin numeric;
+alter table public.simulation_results add column if not exists estimated_net_margin numeric;
+alter table public.simulation_results add column if not exists charging_window_start timestamptz;
+alter table public.simulation_results add column if not exists charging_window_end timestamptz;
+alter table public.simulation_results add column if not exists discharging_window_start timestamptz;
+alter table public.simulation_results add column if not exists discharging_window_end timestamptz;
 alter table public.simulation_results add column if not exists created_at timestamptz default now();
 
 alter table public.dispatch_events add column if not exists id uuid default gen_random_uuid();
 alter table public.dispatch_events add column if not exists dispatch_id text;
-alter table public.dispatch_events add column if not exists asset_id uuid;
 alter table public.dispatch_events add column if not exists simulation_id uuid;
+alter table public.dispatch_events add column if not exists asset_id text;
+alter table public.dispatch_events add column if not exists market text;
+alter table public.dispatch_events add column if not exists location text;
+alter table public.dispatch_events add column if not exists action text default 'discharge';
 alter table public.dispatch_events add column if not exists dispatch_timestamp timestamptz;
 alter table public.dispatch_events add column if not exists charge_start timestamptz;
 alter table public.dispatch_events add column if not exists charge_end timestamptz;
 alter table public.dispatch_events add column if not exists discharge_start timestamptz;
 alter table public.dispatch_events add column if not exists discharge_end timestamptz;
-alter table public.dispatch_events add column if not exists market text;
-alter table public.dispatch_events add column if not exists location text;
-alter table public.dispatch_events add column if not exists status text default 'completed';
-alter table public.dispatch_events add column if not exists energy_mwh numeric(18, 6);
-alter table public.dispatch_events add column if not exists charging_cost numeric(18, 2);
-alter table public.dispatch_events add column if not exists discharge_revenue numeric(18, 2);
-alter table public.dispatch_events add column if not exists storage_cost numeric(18, 2);
-alter table public.dispatch_events add column if not exists net_profit numeric(18, 2);
+alter table public.dispatch_events add column if not exists power_mw numeric;
+alter table public.dispatch_events add column if not exists energy_mwh numeric;
+alter table public.dispatch_events add column if not exists charging_cost numeric default 0;
+alter table public.dispatch_events add column if not exists discharge_revenue numeric default 0;
+alter table public.dispatch_events add column if not exists storage_cost numeric default 0;
+alter table public.dispatch_events add column if not exists net_profit numeric default 0;
+alter table public.dispatch_events add column if not exists status text default 'simulated';
 alter table public.dispatch_events add column if not exists created_at timestamptz default now();
 
--- These checks intentionally fail on incompatible historical rows so operators
--- can repair data instead of silently deploying a weaker ledger schema.
+-- The live schema used integer cycles. Numeric preserves existing values while
+-- retaining the API's existing support for fractional equivalent cycles.
+alter table public.simulation_results
+    alter column cycles type numeric using cycles::numeric;
+
+-- Backfill only newly required operational identifiers/timestamps. No rows are
+-- deleted and no existing asset or simulation relationships are rewritten.
+update public.simulation_results
+set external_simulation_id = 'legacy:' || id::text
+where external_simulation_id is null;
+
+update public.dispatch_events
+set dispatch_timestamp = coalesce(charge_start, created_at, now())
+where dispatch_timestamp is null;
+
 alter table public.assets alter column id set not null;
 alter table public.assets alter column asset_id set not null;
 alter table public.assets alter column asset_name set not null;
-alter table public.assets alter column power_mw set not null;
-alter table public.assets alter column energy_mwh set not null;
-alter table public.assets alter column duration_hours set not null;
-alter table public.assets alter column lease_cost_monthly set not null;
-alter table public.assets alter column status set not null;
-alter table public.assets alter column created_at set not null;
-alter table public.assets alter column updated_at set not null;
-
 alter table public.simulation_results alter column id set not null;
-alter table public.simulation_results alter column idempotency_key set not null;
-alter table public.simulation_results alter column request_hash set not null;
+alter table public.simulation_results alter column external_simulation_id set not null;
 alter table public.simulation_results alter column location set not null;
 alter table public.simulation_results alter column market set not null;
+alter table public.simulation_results alter column simulation_date set not null;
 alter table public.simulation_results alter column power_mw set not null;
 alter table public.simulation_results alter column duration_hours set not null;
 alter table public.simulation_results alter column round_trip_efficiency set not null;
 alter table public.simulation_results alter column cycles set not null;
-alter table public.simulation_results alter column charging_cost set not null;
-alter table public.simulation_results alter column discharge_revenue set not null;
-alter table public.simulation_results alter column storage_cost set not null;
-alter table public.simulation_results alter column net_profit set not null;
-alter table public.simulation_results alter column result_json set not null;
-alter table public.simulation_results alter column created_at set not null;
-
 alter table public.dispatch_events alter column id set not null;
 alter table public.dispatch_events alter column dispatch_id set not null;
-alter table public.dispatch_events alter column asset_id set not null;
-alter table public.dispatch_events alter column simulation_id set not null;
 alter table public.dispatch_events alter column dispatch_timestamp set not null;
-alter table public.dispatch_events alter column charge_start set not null;
-alter table public.dispatch_events alter column charge_end set not null;
-alter table public.dispatch_events alter column discharge_start set not null;
-alter table public.dispatch_events alter column discharge_end set not null;
-alter table public.dispatch_events alter column market set not null;
-alter table public.dispatch_events alter column location set not null;
-alter table public.dispatch_events alter column status set not null;
-alter table public.dispatch_events alter column energy_mwh set not null;
-alter table public.dispatch_events alter column charging_cost set not null;
-alter table public.dispatch_events alter column discharge_revenue set not null;
-alter table public.dispatch_events alter column storage_cost set not null;
-alter table public.dispatch_events alter column net_profit set not null;
-alter table public.dispatch_events alter column created_at set not null;
 
 do $$
 begin
@@ -187,11 +185,12 @@ begin
     end if;
     if not exists (
         select 1 from pg_constraint
-        where conname = 'simulation_results_idempotency_key_key'
+        where conname = 'simulation_results_external_simulation_id_key'
           and conrelid = 'public.simulation_results'::regclass
     ) then
         alter table public.simulation_results
-            add constraint simulation_results_idempotency_key_key unique (idempotency_key);
+            add constraint simulation_results_external_simulation_id_key
+            unique (external_simulation_id);
     end if;
     if not exists (
         select 1 from pg_constraint
@@ -208,7 +207,8 @@ begin
     ) then
         alter table public.simulation_results
             add constraint simulation_results_asset_id_fkey
-            foreign key (asset_id) references public.assets(id) on delete restrict;
+            foreign key (asset_id) references public.assets(asset_id)
+            on update cascade on delete restrict;
     end if;
     if not exists (
         select 1 from pg_constraint
@@ -217,7 +217,8 @@ begin
     ) then
         alter table public.dispatch_events
             add constraint dispatch_events_asset_id_fkey
-            foreign key (asset_id) references public.assets(id) on delete restrict;
+            foreign key (asset_id) references public.assets(asset_id)
+            on update cascade on delete restrict;
     end if;
     if not exists (
         select 1 from pg_constraint
@@ -248,11 +249,13 @@ begin
             ))
             or (table_name = 'simulation_results' and column_name in (
                 'power_mw', 'duration_hours', 'round_trip_efficiency', 'cycles',
-                'charging_cost', 'discharge_revenue', 'storage_cost', 'net_profit'
+                'storage_fee_per_mwh', 'variable_om_per_mwh', 'charging_cost',
+                'discharge_revenue', 'gross_arbitrage_margin',
+                'estimated_net_margin'
             ))
             or (table_name = 'dispatch_events' and column_name in (
-                'energy_mwh', 'charging_cost', 'discharge_revenue', 'storage_cost',
-                'net_profit'
+                'power_mw', 'energy_mwh', 'charging_cost', 'discharge_revenue',
+                'storage_cost', 'net_profit'
             ))
           )
           and data_type <> 'numeric'
@@ -260,22 +263,25 @@ begin
         or (
           column_name in ('created_at', 'updated_at', 'dispatch_timestamp',
                           'charge_start', 'charge_end', 'discharge_start',
-                          'discharge_end')
+                          'discharge_end', 'charging_window_start',
+                          'charging_window_end', 'discharging_window_start',
+                          'discharging_window_end')
           and data_type <> 'timestamp with time zone'
         )
         or (
-          column_name in ('id', 'asset_id', 'simulation_id')
-          and table_name in ('assets', 'simulation_results', 'dispatch_events')
-          and not (table_name = 'assets' and column_name = 'asset_id')
+          ((column_name = 'id' and table_name in (
+              'assets', 'simulation_results', 'dispatch_events'
+          )) or (table_name = 'dispatch_events' and column_name = 'simulation_id'))
           and data_type <> 'uuid'
+        )
+        or (
+          column_name = 'asset_id'
+          and table_name in ('assets', 'simulation_results', 'dispatch_events')
+          and data_type <> 'text'
         )
         or (
           table_name = 'simulation_results' and column_name = 'simulation_date'
           and data_type <> 'date'
-        )
-        or (
-          table_name = 'simulation_results' and column_name = 'result_json'
-          and data_type <> 'jsonb'
         )
       )
     limit 1;
