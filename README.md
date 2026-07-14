@@ -274,8 +274,8 @@ Keep the service-role key in Render's secret manager. It must never be sent to R
 Apply [`supabase/migrations/202607130001_supabase_system_of_record.sql`](supabase/migrations/202607130001_supabase_system_of_record.sql) before deploying the API. The migration defines:
 
 - `assets`, keyed by UUID with a unique business `asset_id`.
-- `simulation_results`, keyed by UUID with a unique `idempotency_key` and optional foreign key to `assets`.
-- `dispatch_events`, keyed by UUID with a unique deterministic `dispatch_id` and required foreign keys to both authoritative parent tables.
+- `simulation_results`, keyed by UUID with a unique `external_simulation_id`; its text `asset_id` foreign key preserves the live relationship to `assets.asset_id`.
+- `dispatch_events`, keyed by UUID with a unique deterministic `dispatch_id`, a text `asset_id` foreign key to `assets.asset_id`, and a UUID `simulation_id` foreign key to `simulation_results.id`.
 - Numeric ledger columns, UTC timestamps, stable query indexes, and an `updated_at` trigger for assets.
 - Row-level security on all ledger tables; the Render backend uses the service role, while browser clients receive no database credentials.
 
@@ -333,7 +333,7 @@ The endpoint returns a structured error identifying Supabase when ledger data ca
 
 ### `GET /portfolio/assets`
 
-Returns one performance object for every Supabase asset, including assets with no dispatch history. Metrics are calculated from paginated `dispatch_events` rows linked by the asset UUID.
+Returns one performance object for every Supabase asset, including assets with no dispatch history. Metrics are calculated from paginated `dispatch_events` rows linked by the existing business `asset_id` foreign key.
 
 ```json
 [

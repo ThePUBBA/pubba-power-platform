@@ -220,7 +220,7 @@ def get_asset_performance() -> list[dict]:
     assets = list_assets()
     dispatches = list_dispatch_events(limit=None)
     metrics = {
-        asset["id"]: {
+        asset["asset_id"]: {
             "total_dispatches": 0,
             "total_revenue": 0.0,
             "total_charging_cost": 0.0,
@@ -229,7 +229,7 @@ def get_asset_performance() -> list[dict]:
             "_last_dispatch_datetime": None,
         }
         for asset in assets
-        if asset.get("id")
+        if asset.get("asset_id")
     }
     for dispatch in dispatches:
         values = metrics.get(dispatch.get("asset_id"))
@@ -259,7 +259,7 @@ def get_asset_performance() -> list[dict]:
 
     results = []
     for asset in assets:
-        values = metrics.get(asset.get("id"), {})
+        values = metrics.get(asset.get("asset_id"), {})
         dispatch_count = int(values.get("total_dispatches", 0))
         total_profit = float(values.get("total_profit", 0.0))
         results.append(
@@ -300,7 +300,7 @@ def persist_simulation(
         "simulation_results",
         params={
             "select": "*",
-            "idempotency_key": f"eq.{idempotency_key}",
+            "external_simulation_id": f"eq.{idempotency_key}",
             "limit": 1,
         },
     )
@@ -337,7 +337,7 @@ def persist_simulation(
                     "simulation_results",
                     params={
                         "select": "*",
-                        "idempotency_key": f"eq.{idempotency_key}",
+                        "external_simulation_id": f"eq.{idempotency_key}",
                         "limit": 1,
                     },
                 )
@@ -400,7 +400,7 @@ def persist_simulation(
             "patch",
             "simulation_results",
             params={"id": f"eq.{simulation_id}"},
-            json_body={"asset_id": asset["id"]},
+            json_body={"asset_id": asset["asset_id"]},
             prefer="return=minimal",
         )
     except SupabaseError as exc:
@@ -413,7 +413,11 @@ def persist_simulation(
         ) from exc
     dispatch_id = f"dispatch:{simulation_id}"
     dispatch_payload = _dispatch_payload(
-        dispatch_id, asset["id"], simulation_id, request_fields, simulation_result
+        dispatch_id,
+        asset["asset_id"],
+        simulation_id,
+        request_fields,
+        simulation_result,
     )
     try:
         _request(
@@ -496,11 +500,14 @@ def verify_migration() -> dict:
             "status", "created_at", "updated_at",
         },
         "simulation_results": {
-            "id", "idempotency_key", "request_hash", "asset_id", "location",
-            "market", "simulation_date", "power_mw", "duration_hours",
-            "round_trip_efficiency", "cycles", "charging_cost",
-            "discharge_revenue", "storage_cost", "net_profit", "result_json",
-            "created_at",
+            "id", "external_simulation_id", "request_hash", "asset_id",
+            "location", "market", "simulation_date", "power_mw",
+            "duration_hours", "round_trip_efficiency", "cycles",
+            "storage_fee_per_mwh", "variable_om_per_mwh", "charging_cost",
+            "discharge_revenue", "gross_arbitrage_margin",
+            "estimated_net_margin", "charging_window_start",
+            "charging_window_end", "discharging_window_start",
+            "discharging_window_end", "created_at",
         },
         "dispatch_events": {
             "id", "dispatch_id", "asset_id", "simulation_id",
@@ -519,7 +526,7 @@ def verify_migration() -> dict:
     assets = list_assets()
     simulations = _list_all("simulation_results", params={"select": "id"})
     dispatches = list_dispatch_events(limit=None)
-    asset_ids = {record.get("id") for record in assets}
+    asset_ids = {record.get("asset_id") for record in assets}
     simulation_ids = {record.get("id") for record in simulations}
     orphaned = sum(
         1
@@ -553,21 +560,30 @@ def _simulation_payload(
 ) -> dict:
     return {
         "id": simulation_id,
-        "idempotency_key": idempotency_key,
+        "external_simulation_id": idempotency_key,
         "request_hash": request_hash,
         "location": request_fields.get("location"),
         "market": request_fields.get("market"),
-        "simulation_date": request_fields.get("date"),
+        "simulation_date": request_fields.get("date")
+        or result["charging_window"]["start_timestamp"][:10],
         "power_mw": result.get("power_mw"),
         "duration_hours": result.get("duration_hours"),
         "round_trip_efficiency": result.get("round_trip_efficiency"),
         "cycles": result.get("cycles"),
+        "storage_fee_per_mwh": result.get(
+            "storage_fee_per_mwh", request_fields.get("storage_fee_per_mwh", 0)
+        ),
+        "variable_om_per_mwh": result.get(
+            "variable_om_per_mwh", request_fields.get("variable_om_per_mwh", 0)
+        ),
         "charging_cost": result.get("charging_cost"),
         "discharge_revenue": result.get("discharge_revenue"),
-        "storage_cost": _safe_number(result.get("storage_lease_cost"), "storage_lease_cost")
-        + _safe_number(result.get("variable_operating_cost"), "variable_operating_cost"),
-        "net_profit": result.get("estimated_net_margin"),
-        "result_json": result,
+        "gross_arbitrage_margin": result.get("gross_arbitrage_margin"),
+        "estimated_net_margin": result.get("estimated_net_margin"),
+        "charging_window_start": result["charging_window"]["start_timestamp"],
+        "charging_window_end": result["charging_window"]["end_timestamp"],
+        "discharging_window_start": result["discharging_window"]["start_timestamp"],
+        "discharging_window_end": result["discharging_window"]["end_timestamp"],
     }
 
 
@@ -589,7 +605,9 @@ def _dispatch_payload(
         "discharge_end": result["discharging_window"]["end_timestamp"],
         "market": request_fields.get("market"),
         "location": request_fields.get("location"),
-        "status": "completed",
+        "action": "discharge",
+        "power_mw": result.get("power_mw"),
+        "status": "simulated",
         "energy_mwh": result.get("discharged_energy_mwh"),
         "charging_cost": result.get("charging_cost"),
         "discharge_revenue": result.get("discharge_revenue"),
@@ -625,7 +643,7 @@ def _dispatch_filter_params(
         asset = get_asset(asset_id)
         if not asset:
             return None
-        params["asset_id"] = f"eq.{asset['id']}"
+        params["asset_id"] = f"eq.{asset['asset_id']}"
     if market:
         params["market"] = f"eq.{market}"
     if location:
