@@ -86,9 +86,9 @@ def test_migration_defines_authoritative_schema_integrity():
         assert f"create table if not exists public.{table}" in sql
         assert f"alter table public.{table} enable row level security" in sql
     assert "unique (asset_id)" in sql
-    assert "unique (idempotency_key)" in sql
+    assert "unique (external_simulation_id)" in sql
     assert "unique (dispatch_id)" in sql
-    assert "foreign key (asset_id) references public.assets(id)" in sql
+    assert "foreign key (asset_id) references public.assets(asset_id)" in sql
     assert "foreign key (simulation_id) references public.simulation_results(id)" in sql
     assert "dispatch_events_timestamp_id_idx" in sql
 
@@ -184,10 +184,10 @@ def test_persistence_retry_does_not_duplicate_dispatch_and_preserves_foreign_key
 
     def request(method, table, params=None, json_body=None, prefer=None):
         if table == "simulation_results" and method == "get":
-            key = params["idempotency_key"].removeprefix("eq.")
+            key = params["external_simulation_id"].removeprefix("eq.")
             return [simulations[key]] if key in simulations else []
         if table == "simulation_results" and method == "post":
-            simulations[json_body["idempotency_key"]] = dict(json_body)
+            simulations[json_body["external_simulation_id"]] = dict(json_body)
             return [dict(json_body)]
         if table == "simulation_results" and method == "patch":
             simulations["run-1"]["asset_id"] = json_body["asset_id"]
@@ -211,8 +211,13 @@ def test_persistence_retry_does_not_duplicate_dispatch_and_preserves_foreign_key
     assert first == second
     assert len(simulations) == 1
     assert len(dispatches) == 1
+    simulation = simulations["run-1"]
+    assert simulation["external_simulation_id"] == "run-1"
+    assert simulation["asset_id"] == "BAT-001"
+    assert simulation["storage_fee_per_mwh"] == 5
+    assert "idempotency_key" not in simulation
     dispatch = next(iter(dispatches.values()))
-    assert dispatch["asset_id"] == "asset-uuid"
+    assert dispatch["asset_id"] == "BAT-001"
     assert dispatch["simulation_id"] == first["simulation_id"]
     assert dispatch["dispatch_id"] == f"dispatch:{first['simulation_id']}"
 
@@ -332,7 +337,7 @@ def test_dispatch_filters_and_stable_pagination_are_forwarded(monkeypatch):
         offset=50,
     )
 
-    assert captured["asset_id"] == "eq.asset-uuid"
+    assert captured["asset_id"] == "eq.BAT-001"
     assert captured["market"] == "eq.RTM"
     assert captured["location"] == "eq.NP15"
     assert captured["status"] == "eq.completed"
@@ -356,7 +361,7 @@ def test_asset_performance_includes_zero_dispatch_assets(monkeypatch):
         supabase,
         "list_dispatch_events",
         lambda **kwargs: [{
-            "asset_id": "one",
+            "asset_id": "ONE",
             "discharge_revenue": "100",
             "charging_cost": "40",
             "net_profit": "50",
