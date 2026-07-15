@@ -721,13 +721,13 @@ def test_cors_allows_only_configured_origins(monkeypatch):
 
     monkeypatch.setenv(
         "ALLOWED_ORIGINS",
-        "https://only1.retool.com, https://dashboard.only1power.com",
+        "https://pubba.retool.com, https://app.pubbapower.com",
     )
     client = TestClient(main.create_app())
     allowed = client.options(
         "/simulate",
         headers={
-            "Origin": "https://only1.retool.com",
+            "Origin": "https://pubba.retool.com",
             "Access-Control-Request-Method": "POST",
         },
     )
@@ -740,7 +740,7 @@ def test_cors_allows_only_configured_origins(monkeypatch):
     )
 
     assert allowed.status_code == 200
-    assert allowed.headers["access-control-allow-origin"] == "https://only1.retool.com"
+    assert allowed.headers["access-control-allow-origin"] == "https://pubba.retool.com"
     assert "PATCH" in allowed.headers["access-control-allow-methods"]
     assert "access-control-allow-origin" not in denied.headers
 
@@ -751,14 +751,14 @@ def test_cors_parses_pubba_and_retool_origins_with_whitespace(monkeypatch):
     monkeypatch.setenv(
         "ALLOWED_ORIGINS",
         " , https://pubbapower.com,  https://www.pubbapower.com , "
-        "https://app.pubbapower.com, ,https://only1.retool.com, ",
+        "https://app.pubbapower.com, ,https://pubba.retool.com, ",
     )
 
     assert main._allowed_origins() == [
         "https://pubbapower.com",
         "https://www.pubbapower.com",
         "https://app.pubbapower.com",
-        "https://only1.retool.com",
+        "https://pubba.retool.com",
     ]
     client = TestClient(main.create_app())
     for origin in main._allowed_origins():

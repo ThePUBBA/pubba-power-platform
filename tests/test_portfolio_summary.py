@@ -12,7 +12,7 @@ from services.portfolio_summary import (
 
 
 PORTFOLIO = {
-    "id": "portfolio-only1",
+    "id": "portfolio-pubba",
     "code": "ONLY1",
     "name": "PUBBA Power",
     "default_market": "CAISO",
