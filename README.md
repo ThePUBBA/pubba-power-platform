@@ -6,6 +6,15 @@ FastAPI service for retrieving CAISO locational marginal price (LMP) data and id
 
 PUBBA Power is the energy division of PUBBA, focused on electricity trading, long-duration energy storage (LDES), portfolio optimization, and grid services.
 
+## Repository
+
+The PUBBA Power platform source is hosted at [ThePubba/pubba-power-platform](https://github.com/ThePubba/pubba-power-platform).
+
+```bash
+git clone https://github.com/ThePubba/pubba-power-platform.git
+cd pubba-power-platform
+```
+
 ## Overview
 
 This API exposes HTTP endpoints for CAISO OASIS LMP lookups and a first-pass historical arbitrage analysis. It is intended to support market research, dispatch analysis, reporting, and downstream automation for energy storage workflows.
