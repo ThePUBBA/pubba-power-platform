@@ -314,22 +314,78 @@ Example request with an asset link:
 
 ### `GET /portfolio/summary`
 
-Returns portfolio-wide counts and financial totals calculated directly from Supabase `assets`, `simulation_results`, and `dispatch_events`:
+Returns the authoritative portfolio-scoped executive summary. Optional
+timezone-aware `start_at`, `end_at`, and IANA `timezone` parameters control the
+selected summary period. Current day, week, month, quarter, and year revenue
+uses the portfolio reporting timezone. Financial and energy values include
+completed dispatches and centrally normalized legacy simulation-derived rows.
 
 ```json
 {
-  "total_assets": 3,
-  "active_assets": 2,
-  "total_simulations": 12,
-  "total_dispatches": 8,
-  "cumulative_revenue": 10000,
-  "cumulative_charging_cost": 4000,
-  "cumulative_storage_cost": 1000,
-  "cumulative_net_profit": 5000
+  "portfolio": {
+    "id": "uuid",
+    "code": "ONLY1",
+    "name": "Only1 Power",
+    "default_market": "CAISO",
+    "reporting_timezone": "America/Los_Angeles",
+    "currency_code": "USD"
+  },
+  "financial": {
+    "gross_revenue": "10000.00",
+    "charging_cost": "4000.00",
+    "net_profit": "5000.00",
+    "total_portfolio_profit": "25000.00",
+    "trading_return": "1.25",
+    "weighted_average_spread_per_mwh": "42.17"
+  },
+  "operations": {
+    "total_dispatches": 8,
+    "purchased_energy_mwh": "100.00",
+    "sold_energy_mwh": "80.00",
+    "energy_throughput_mwh": "180.00",
+    "last_dispatch_at": "2026-07-14T18:00:00Z"
+  }
 }
 ```
 
-The endpoint returns a structured error identifying Supabase when ledger data cannot be retrieved.
+The full response also includes current-period revenue, active fleet capacity,
+metric version, generation time, and operational data freshness. Empty
+portfolios return a successful zero-valued response.
+
+## Executive Overview Dashboard
+
+The Streamlit dashboard provides persistent `Overview` and `Simulations`
+navigation. Overview displays the backend summary as financial, current-period
+revenue, operations, and fleet KPI cards. It supports lifetime and custom date
+ranges, timezone-aware timestamps, manual refresh, loading feedback, empty
+states, and safe operator-facing errors.
+
+Streamlit performs presentation formatting only. It does not access Supabase,
+aggregate dispatches, or calculate profit, return, spread, or revenue periods.
+The Simulations page calls the existing `POST /simulate` workflow.
+
+Configure the backend location without embedding a production URL:
+
+```bash
+export ONLY1_API_BASE_URL=http://localhost:8000
+```
+
+After applying the portfolio migrations and starting FastAPI, run:
+
+```bash
+streamlit run dashboard/app.py
+```
+
+Custom ranges require an IANA reporting timezone and send inclusive,
+timezone-aware start and end timestamps. Values use portfolio currency, MW,
+MWh, currency/MWh, and the backend trading-return ratio formatted as a
+percentage. A valid portfolio with no active assets or completed dispatches is
+shown as an empty operational state rather than an error.
+
+Required migrations, in order:
+
+1. `202607140001_portfolio_schema_foundation.sql`
+2. `202607140002_portfolio_summary_inputs.sql`
 
 ### `GET /portfolio/assets`
 

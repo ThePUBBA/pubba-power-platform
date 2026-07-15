@@ -5,6 +5,7 @@ import io
 import logging
 import os
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from typing import Optional
 
 from fastapi import FastAPI, Header, Query, Request
@@ -24,7 +25,6 @@ from supabase import (
     derive_idempotency_key,
     get_asset_performance,
     get_asset,
-    get_portfolio_summary,
     list_assets,
     list_dispatch_events,
     persist_simulation,
@@ -32,6 +32,7 @@ from supabase import (
 )
 from caiso import CaisoOasisError, fetch_lmp_data
 from simulation import StorageSimulationError, simulate_storage_profit
+from services.portfolio_summary import PortfolioSummaryError, build_portfolio_summary
 
 
 SERVICE_NAME = "Only1 LMP API"
@@ -120,15 +121,66 @@ class HealthResponse(BaseModel):
     supabase_connectivity_status: str
 
 
-class PortfolioSummaryResponse(BaseModel):
-    total_assets: int
-    active_assets: int
-    total_simulations: int
+class PortfolioIdentityResponse(BaseModel):
+    id: str
+    code: str
+    name: str
+    default_market: str
+    reporting_timezone: str
+    currency_code: str
+
+
+class SummaryPeriodResponse(BaseModel):
+    start_at: Optional[datetime] = None
+    end_at: datetime
+    timezone: str
+
+
+class SummaryFinancialResponse(BaseModel):
+    gross_revenue: Decimal = Field(description="Gross revenue in portfolio currency")
+    charging_cost: Decimal = Field(description="Charging cost in portfolio currency")
+    net_profit: Decimal = Field(description="Net profit in portfolio currency")
+    total_portfolio_profit: Decimal = Field(description="Lifetime completed-dispatch profit")
+    trading_return: Decimal = Field(description="Net profit / charging cost as a decimal ratio")
+    weighted_average_spread_per_mwh: Decimal = Field(description="Energy-weighted spread in currency/MWh")
+
+
+class PeriodRevenueResponse(BaseModel):
+    today: Decimal
+    week: Decimal
+    month: Decimal
+    quarter: Decimal
+    year: Decimal
+
+
+class SummaryOperationsResponse(BaseModel):
     total_dispatches: int
-    cumulative_revenue: float
-    cumulative_charging_cost: float
-    cumulative_storage_cost: float
-    cumulative_net_profit: float
+    purchased_energy_mwh: Decimal
+    sold_energy_mwh: Decimal
+    energy_throughput_mwh: Decimal
+    last_dispatch_at: Optional[datetime] = None
+
+
+class SummaryFleetResponse(BaseModel):
+    active_assets: int
+    power_capacity_mw: Decimal
+    energy_capacity_mwh: Decimal
+
+
+class SummaryMetadataResponse(BaseModel):
+    metric_version: str
+    data_freshness_at: Optional[datetime] = None
+    generated_at: datetime
+
+
+class PortfolioSummaryResponse(BaseModel):
+    portfolio: PortfolioIdentityResponse
+    period: SummaryPeriodResponse
+    financial: SummaryFinancialResponse
+    period_revenue: PeriodRevenueResponse
+    operations: SummaryOperationsResponse
+    fleet: SummaryFleetResponse
+    metadata: SummaryMetadataResponse
 
 
 class AssetPerformanceResponse(BaseModel):
@@ -353,10 +405,39 @@ def create_app() -> FastAPI:
             "supabase_connectivity_status": supabase_status,
         }
 
-    @app.get("/portfolio/summary", response_model=PortfolioSummaryResponse)
-    def portfolio_summary():
+    @app.get(
+        "/portfolio/summary",
+        response_model=PortfolioSummaryResponse,
+        summary="Get the executive portfolio summary",
+        description=(
+            "Returns portfolio-scoped financial, operational, and fleet KPIs. "
+            "Financial and energy metrics include completed dispatches; legacy "
+            "simulation-derived ledger rows are normalized as completed. Reporting "
+            "periods use the portfolio timezone and metric version 1.0. Monetary "
+            "values use the portfolio currency, spread uses currency/MWh, capacity "
+            "uses MW, and energy uses MWh."
+        ),
+        responses={400: {"description": "Invalid date range or timezone"}, 503: {"description": "Default portfolio unavailable"}},
+    )
+    def portfolio_summary(
+        start_at: Optional[datetime] = Query(
+            default=None, description="Inclusive summary start timestamp with offset"
+        ),
+        end_at: Optional[datetime] = Query(
+            default=None, description="Inclusive summary end timestamp with offset"
+        ),
+        timezone_name: Optional[str] = Query(
+            default=None,
+            alias="timezone",
+            description="Validated IANA reporting timezone override",
+        ),
+    ):
         try:
-            return get_portfolio_summary()
+            return build_portfolio_summary(
+                start_at=start_at, end_at=end_at, timezone_name=timezone_name
+            )
+        except PortfolioSummaryError as exc:
+            raise ApiError(400, exc.code, str(exc), field=exc.field) from exc
         except SupabaseError as exc:
             _raise_supabase_api_error(exc)
 

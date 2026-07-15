@@ -16,6 +16,7 @@ import requests
 
 SUPABASE_TIMEOUT_SECONDS = 10
 PAGE_SIZE = 1000
+DEFAULT_PORTFOLIO_CODE = "ONLY1"
 logger = logging.getLogger(__name__)
 
 
@@ -56,6 +57,16 @@ class MissingAssetError(SupabaseError):
         )
 
 
+class MissingDefaultPortfolioError(SupabaseError):
+    def __init__(self, portfolio_code: str = DEFAULT_PORTFOLIO_CODE) -> None:
+        super().__init__(
+            f"Default portfolio was not found: {portfolio_code}",
+            error_code="missing_default_portfolio",
+            status_code=503,
+            operation="resolve_default_portfolio",
+        )
+
+
 def supabase_is_configured() -> bool:
     return bool(_configuration()[0] and _configuration()[1])
 
@@ -81,6 +92,29 @@ def derive_idempotency_key(request_fields: dict, simulation_result: dict) -> str
         separators=(",", ":"),
     )
     return f"auto:{hashlib.sha256(canonical.encode()).hexdigest()}"
+
+
+def get_default_portfolio() -> dict:
+    """Resolve the current single portfolio by its stable operator code."""
+    records = _request(
+        "get",
+        "portfolios",
+        params={
+            "select": "id,code,name,default_market,reporting_timezone,currency_code,status",
+            "code": f"eq.{DEFAULT_PORTFOLIO_CODE}",
+            "limit": 1,
+        },
+    )
+    if not records:
+        raise MissingDefaultPortfolioError()
+    portfolio = records[0]
+    if not portfolio.get("id"):
+        raise SupabaseError(
+            "Default portfolio record is missing its id",
+            error_code="malformed_supabase_response",
+            operation="resolve_default_portfolio",
+        )
+    return portfolio
 
 
 def list_assets(*, limit: int | None = None, offset: int = 0) -> list[dict]:
@@ -109,11 +143,13 @@ def get_asset(asset_id: str) -> dict | None:
 
 
 def create_asset(fields: dict) -> dict:
+    portfolio = get_default_portfolio()
+    payload = {**fields, "portfolio_id": portfolio["id"]}
     try:
         records = _request(
             "post",
             "assets",
-            json_body=fields,
+            json_body=payload,
             prefer="return=representation",
         )
     except SupabaseError as exc:
@@ -182,38 +218,33 @@ def list_dispatch_events(
     return _list_all("dispatch_events", params=params)
 
 
-def get_portfolio_summary() -> dict[str, int | float]:
-    assets = list_assets()
-    simulations = _list_all(
-        "simulation_results", params={"select": "id", "order": "id.asc"}
+def get_portfolio_summary_records(portfolio: dict) -> tuple[list[dict], list[dict]]:
+    """Return summary inputs scoped to one resolved portfolio."""
+    portfolio_id = portfolio["id"]
+    assets = _list_all(
+        "assets",
+        params={
+            "select": "id,status,power_mw,energy_mwh,updated_at",
+            "portfolio_id": f"eq.{portfolio_id}",
+            "status": "eq.active",
+            "order": "id.asc",
+        },
     )
-    dispatches = list_dispatch_events(limit=None)
-    return {
-        "total_assets": len(assets),
-        "active_assets": sum(
-            1
-            for asset in assets
-            if str(asset.get("status", "")).strip().lower() == "active"
-        ),
-        "total_simulations": len(simulations),
-        "total_dispatches": len(dispatches),
-        "cumulative_revenue": sum(
-            _safe_number(record.get("discharge_revenue"), "discharge_revenue")
-            for record in dispatches
-        ),
-        "cumulative_charging_cost": sum(
-            _safe_number(record.get("charging_cost"), "charging_cost")
-            for record in dispatches
-        ),
-        "cumulative_storage_cost": sum(
-            _safe_number(record.get("storage_cost"), "storage_cost")
-            for record in dispatches
-        ),
-        "cumulative_net_profit": sum(
-            _safe_number(record.get("net_profit"), "net_profit")
-            for record in dispatches
-        ),
-    }
+    dispatches = _list_all(
+        "dispatch_events",
+        params={
+            "select": (
+                "id,status,dispatch_timestamp,discharge_end,updated_at,"
+                "purchased_energy_mwh,sold_energy_mwh,charging_cost,"
+                "discharge_revenue,net_profit,average_buy_price_per_mwh,"
+                "average_sell_price_per_mwh"
+            ),
+            "portfolio_id": f"eq.{portfolio_id}",
+            "or": "(status.eq.completed,status.eq.simulated)",
+            "order": "dispatch_timestamp.asc,id.asc",
+        },
+    )
+    return assets, dispatches
 
 
 def get_asset_performance() -> list[dict]:
@@ -291,6 +322,8 @@ def persist_simulation(
     simulation_result: dict,
     idempotency_key: str,
 ) -> dict:
+    portfolio = get_default_portfolio()
+    portfolio_id = portfolio["id"]
     request_hash = hashlib.sha256(
         json.dumps(request_fields, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -301,6 +334,7 @@ def persist_simulation(
         params={
             "select": "*",
             "external_simulation_id": f"eq.{idempotency_key}",
+            "portfolio_id": f"eq.{portfolio_id}",
             "limit": 1,
         },
     )
@@ -322,6 +356,7 @@ def persist_simulation(
             request_hash,
             request_fields,
             simulation_result,
+            portfolio_id,
         )
         try:
             created = _request(
@@ -338,6 +373,7 @@ def persist_simulation(
                     params={
                         "select": "*",
                         "external_simulation_id": f"eq.{idempotency_key}",
+                        "portfolio_id": f"eq.{portfolio_id}",
                         "limit": 1,
                     },
                 )
@@ -418,6 +454,7 @@ def persist_simulation(
         simulation_id,
         request_fields,
         simulation_result,
+        portfolio_id,
     )
     try:
         _request(
@@ -494,10 +531,15 @@ def aggregate_report(
 
 def verify_migration() -> dict:
     required_columns = {
+        "portfolios": {
+            "id", "name", "code", "default_market", "reporting_timezone",
+            "currency_code", "status", "created_at", "updated_at",
+        },
         "assets": {
             "id", "asset_id", "asset_name", "technology", "power_mw",
             "energy_mwh", "duration_hours", "location", "lease_cost_monthly",
-            "status", "created_at", "updated_at",
+            "status", "retired_at", "retirement_reason", "revision",
+            "portfolio_id", "created_at", "updated_at",
         },
         "simulation_results": {
             "id", "external_simulation_id", "request_hash", "asset_id",
@@ -507,14 +549,16 @@ def verify_migration() -> dict:
             "discharge_revenue", "gross_arbitrage_margin",
             "estimated_net_margin", "charging_window_start",
             "charging_window_end", "discharging_window_start",
-            "discharging_window_end", "created_at",
+            "discharging_window_end", "portfolio_id", "created_at",
         },
         "dispatch_events": {
             "id", "dispatch_id", "asset_id", "simulation_id",
             "dispatch_timestamp", "charge_start", "charge_end",
             "discharge_start", "discharge_end", "market", "location", "status",
             "energy_mwh", "charging_cost", "discharge_revenue", "storage_cost",
-            "net_profit", "created_at",
+            "net_profit", "purchased_energy_mwh", "sold_energy_mwh",
+            "average_buy_price_per_mwh", "average_sell_price_per_mwh",
+            "portfolio_id", "created_at", "updated_at",
         },
     }
     for table, columns in required_columns.items():
@@ -523,8 +567,11 @@ def verify_migration() -> dict:
             table,
             params={"select": ",".join(sorted(columns)), "limit": 1},
         )
+    portfolio = get_default_portfolio()
     assets = list_assets()
-    simulations = _list_all("simulation_results", params={"select": "id"})
+    simulations = _list_all(
+        "simulation_results", params={"select": "id,portfolio_id"}
+    )
     dispatches = list_dispatch_events(limit=None)
     asset_ids = {record.get("asset_id") for record in assets}
     simulation_ids = {record.get("id") for record in simulations}
@@ -541,6 +588,10 @@ def verify_migration() -> dict:
         ).items()
         if value and count > 1
     ]
+    unowned = sum(
+        record.get("portfolio_id") != portfolio["id"]
+        for record in [*assets, *simulations, *dispatches]
+    )
     return {
         "tables_verified": sorted(required_columns),
         "asset_count": len(assets),
@@ -548,6 +599,8 @@ def verify_migration() -> dict:
         "dispatch_count": len(dispatches),
         "orphaned_dispatch_count": orphaned,
         "duplicate_dispatch_ids": duplicate_ids,
+        "default_portfolio_code": portfolio["code"],
+        "records_outside_default_portfolio": unowned,
     }
 
 
@@ -557,11 +610,13 @@ def _simulation_payload(
     request_hash: str,
     request_fields: dict,
     result: dict,
+    portfolio_id: str,
 ) -> dict:
     return {
         "id": simulation_id,
         "external_simulation_id": idempotency_key,
         "request_hash": request_hash,
+        "portfolio_id": portfolio_id,
         "location": request_fields.get("location"),
         "market": request_fields.get("market"),
         "simulation_date": request_fields.get("date")
@@ -593,11 +648,13 @@ def _dispatch_payload(
     simulation_id: str,
     request_fields: dict,
     result: dict,
+    portfolio_id: str,
 ) -> dict:
     return {
         "dispatch_id": dispatch_id,
         "asset_id": asset_id,
         "simulation_id": simulation_id,
+        "portfolio_id": portfolio_id,
         "dispatch_timestamp": result["charging_window"]["start_timestamp"],
         "charge_start": result["charging_window"]["start_timestamp"],
         "charge_end": result["charging_window"]["end_timestamp"],
@@ -609,6 +666,18 @@ def _dispatch_payload(
         "power_mw": result.get("power_mw"),
         "status": "simulated",
         "energy_mwh": result.get("discharged_energy_mwh"),
+        "purchased_energy_mwh": result.get("charging_energy_required_mwh"),
+        "sold_energy_mwh": result.get("discharged_energy_mwh"),
+        "average_buy_price_per_mwh": (
+            result.get("charging_cost") / result.get("charging_energy_required_mwh")
+            if result.get("charging_energy_required_mwh")
+            else None
+        ),
+        "average_sell_price_per_mwh": (
+            result.get("discharge_revenue") / result.get("discharged_energy_mwh")
+            if result.get("discharged_energy_mwh")
+            else None
+        ),
         "charging_cost": result.get("charging_cost"),
         "discharge_revenue": result.get("discharge_revenue"),
         "storage_cost": _safe_number(result.get("storage_lease_cost"), "storage_lease_cost")

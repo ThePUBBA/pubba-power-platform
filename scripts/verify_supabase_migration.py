@@ -31,6 +31,7 @@ def main() -> int:
         "ok"
         if summary["orphaned_dispatch_count"] == 0
         and not summary["duplicate_dispatch_ids"]
+        and summary["records_outside_default_portfolio"] == 0
         else "integrity_warning"
     )
     print(json.dumps({"status": status, **summary}, indent=2, sort_keys=True))
