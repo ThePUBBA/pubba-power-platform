@@ -1,2 +1,1 @@
-"""Only1 Power Streamlit dashboard."""
-
+"""PUBBA Power Streamlit operations console."""

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the Only1 Power Supabase ledger without modifying data."""
+"""Verify the PUBBA Power Supabase ledger without modifying data."""
 
 from __future__ import annotations
 

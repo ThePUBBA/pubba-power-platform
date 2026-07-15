@@ -5,7 +5,7 @@
 
 ## Decision
 
-Every asset, simulation result, and dispatch event belongs to a portfolio. The
+Every PUBBA Power asset, simulation result, and dispatch event belongs to a portfolio. The
 initial production portfolio is resolved by the stable code `ONLY1`; application
 code never embeds its generated UUID. Supabase remains the authority for the
 portfolio identity and ownership relationships.
@@ -33,4 +33,3 @@ Rollback should first deploy application code that no longer writes
 columns and the portfolio row should be retained for recovery. Dropping them is
 intentionally not part of rollback because it would silently destroy ownership
 history.
-

@@ -67,7 +67,7 @@ def default_portfolio():
     return {
         "id": "11111111-1111-1111-1111-111111111111",
         "code": "ONLY1",
-        "name": "Only1 Power",
+        "name": "PUBBA Power",
         "default_market": "CAISO",
         "reporting_timezone": "America/Los_Angeles",
         "currency_code": "USD",

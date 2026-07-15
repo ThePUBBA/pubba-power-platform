@@ -1,4 +1,4 @@
-"""Streamlit entry point for the Only1 Power operations dashboard."""
+"""Streamlit entry point for the PUBBA Power operations console."""
 
 import streamlit as st
 
@@ -9,17 +9,17 @@ from dashboard.pages import overview, simulations
 
 def main() -> None:
     st.set_page_config(
-        page_title="Only1 Power Operations",
+        page_title="PUBBA Power Operations Console",
         page_icon="⚡",
         layout="wide",
         initial_sidebar_state="expanded",
     )
     install_console_theme(st)
-    st.sidebar.markdown("## Only1 Power")
-    st.sidebar.caption("Operations Intelligence")
+    st.sidebar.markdown("## PUBBA Power")
+    st.sidebar.caption("PUBBA Power Operations Console")
     page = st.sidebar.radio("Navigation", ["Overview", "Simulations"], index=0)
     st.sidebar.divider()
-    st.sidebar.caption("Metrics are supplied by the Only1 FastAPI service.")
+    st.sidebar.caption("Metrics are supplied by the PUBBA Power API.")
     try:
         client = Only1ApiClient()
     except DashboardApiError as exc:
@@ -29,8 +29,9 @@ def main() -> None:
         overview.render(st, client)
     else:
         simulations.render(st, client)
+    st.sidebar.divider()
+    st.sidebar.caption("© 2026 PUBBA Power")
 
 
 if __name__ == "__main__":
     main()
-

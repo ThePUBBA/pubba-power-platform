@@ -6,7 +6,7 @@
 
 ## Decision
 
-Phase 2 is an operational portfolio and dispatch-intelligence layer on top of
+PUBBA Power Phase 2 is an operational portfolio and dispatch-intelligence layer on top of
 the existing simulation engine. Supabase is the authoritative operational
 datastore, and FastAPI is the sole application API. Presentation clients must
 not own KPI formulas, write directly with a Supabase service-role credential,
@@ -92,4 +92,3 @@ Existing endpoints remain unchanged in this decision-only increment. New
 portfolio calculations live in backend services or database views and are
 covered by reconciliation tests. Schema changes use expand-migrate-contract
 migrations, and UI replacements do not require moving business logic.
-

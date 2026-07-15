@@ -1,6 +1,10 @@
-# Only1 LMP API
+# PUBBA Power API
 
-FastAPI service for retrieving CAISO locational marginal price (LMP) data and identifying simple historical storage arbitrage opportunities for Only1 Power workflows.
+FastAPI service for retrieving CAISO locational marginal price (LMP) data and identifying simple historical storage arbitrage opportunities for PUBBA Power workflows.
+
+# About PUBBA
+
+PUBBA Power is the energy division of PUBBA, focused on electricity trading, long-duration energy storage (LDES), portfolio optimization, and grid services.
 
 ## Overview
 
@@ -17,7 +21,7 @@ Health check endpoint.
 Example response:
 
 ```json
-{"message":"Only1 LMP API is running"}
+{"message":"PUBBA Power API is running"}
 ```
 
 ### `GET /lmp`
@@ -92,7 +96,7 @@ Sample response:
 
 ### `POST /simulate` (Retool)
 
-Run a storage simulation from a JSON request. This is the preferred endpoint for the Only1 Power Retool dashboard. It calls the same simulation and arbitrage functions as the legacy GET endpoint.
+Run a storage simulation from a JSON request. This is the preferred endpoint for the PUBBA Power Retool dashboard. It calls the same simulation and arbitrage functions as the legacy GET endpoint.
 
 ```bash
 curl -X POST "http://localhost:8000/simulate" \
@@ -231,7 +235,7 @@ curl "http://localhost:8000/health"
 ```json
 {
   "status": "ok",
-  "service_name": "Only1 LMP API",
+  "service_name": "PUBBA Power API",
   "api_version": "1.0.0",
   "current_utc_timestamp": "2026-07-12T20:00:00Z",
   "supabase_connectivity_status": "connected"
@@ -255,10 +259,10 @@ For browser-based Retool requests, add the exact Retool origin to `ALLOWED_ORIGI
 `ALLOWED_ORIGINS` is a comma-separated allowlist. It has no wildcard default and CORS middleware is disabled when the variable is empty.
 
 ```bash
-ALLOWED_ORIGINS=https://your-org.retool.com,https://dashboard.only1power.com
+ALLOWED_ORIGINS=https://pubbapower.com,https://www.pubbapower.com,https://app.pubbapower.com,https://your-org.retool.com
 ```
 
-Copy `.env.example` as a deployment reference, but configure the actual value through the hosting provider. Origins must include the scheme and must not include a trailing path. Never put secrets in `.env.example` or commit a populated `.env` file.
+Whitespace and empty comma-separated entries are ignored. Copy `.env.example` as a deployment reference, but configure the actual value through the hosting provider. Origins must include the scheme and must not include a trailing path. Never use wildcard CORS with credentials. Never put secrets in `.env.example` or commit a populated `.env` file.
 
 ## Supabase PostgreSQL Ledger
 
@@ -325,7 +329,7 @@ completed dispatches and centrally normalized legacy simulation-derived rows.
   "portfolio": {
     "id": "uuid",
     "code": "ONLY1",
-    "name": "Only1 Power",
+    "name": "PUBBA Power",
     "default_market": "CAISO",
     "reporting_timezone": "America/Los_Angeles",
     "currency_code": "USD"
@@ -352,7 +356,7 @@ The full response also includes current-period revenue, active fleet capacity,
 metric version, generation time, and operational data freshness. Empty
 portfolios return a successful zero-valued response.
 
-## Executive Overview Dashboard
+## PUBBA Power Operations Console
 
 The Streamlit dashboard provides persistent `Overview` and `Simulations`
 navigation. Overview displays the backend summary as financial, current-period
@@ -367,8 +371,10 @@ The Simulations page calls the existing `POST /simulate` workflow.
 Configure the backend location without embedding a production URL:
 
 ```bash
-export ONLY1_API_BASE_URL=http://localhost:8000
+export PUBBA_POWER_API_BASE_URL=http://localhost:8000
 ```
+
+The dashboard prefers `PUBBA_POWER_API_BASE_URL` and falls back to the existing `ONLY1_API_BASE_URL` compatibility variable. No implicit localhost URL is used; local development must configure one of these variables explicitly.
 
 After applying the portfolio migrations and starting FastAPI, run:
 
@@ -386,6 +392,7 @@ Required migrations, in order:
 
 1. `202607140001_portfolio_schema_foundation.sql`
 2. `202607140002_portfolio_summary_inputs.sql`
+3. `202607150001_pubba_power_branding.sql`
 
 ### `GET /portfolio/assets`
 
@@ -539,6 +546,8 @@ http://localhost:8000/docs
 ```
 
 ## Production Verification Checklist
+
+The intended public domain architecture is `pubbapower.com` for the marketing site, `app.pubbapower.com` for the Operations Console, and `api.pubbapower.com` for FastAPI. These URLs should not be treated as active until DNS, hosting, and TLS verification are complete. See [PUBBA Power domain deployment](docs/deployment/pubba-power-domains.md) for configuration, manual DNS steps, verification, and rollback.
 
 - Confirm the deployed Git SHA matches the latest `main` commit and the working tree is clean before release.
 - Confirm Render uses Python 3.12 (matching `.python-version`), installs `requirements.txt`, and starts Uvicorn with `uvicorn main:app --host 0.0.0.0 --port $PORT` or an equivalent command.

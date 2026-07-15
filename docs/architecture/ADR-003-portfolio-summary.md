@@ -6,7 +6,7 @@
 
 ## Decision
 
-`GET /portfolio/summary` is the backend-owned source for executive portfolio
+`GET /portfolio/summary` is the backend-owned source for PUBBA Power portfolio
 KPIs. The route validates inputs, the portfolio summary service owns reporting
 periods and formulas, and the Supabase repository supplies portfolio-scoped
 records. Presentation clients do not calculate or reconcile these metrics.
@@ -49,4 +49,3 @@ spread and throughput inputs without introducing a materialized view.
 Future explicit multi-portfolio APIs can pass a selected authorized portfolio
 to the same service. Repository internals may later use aggregate views without
 changing this endpoint contract.
-

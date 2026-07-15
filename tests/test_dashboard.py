@@ -171,7 +171,43 @@ def test_empty_summary_is_valid_state():
     assert not is_empty_summary(summary())
 
 
-def test_client_configuration_is_required(monkeypatch):
+def test_pubba_api_base_url_takes_precedence(monkeypatch):
+    monkeypatch.setenv("PUBBA_POWER_API_BASE_URL", " https://api.pubbapower.com/ ")
+    monkeypatch.setenv("ONLY1_API_BASE_URL", "https://legacy.example.test")
+
+    client = Only1ApiClient()
+
+    assert client.base_url == "https://api.pubbapower.com"
+
+
+def test_legacy_api_base_url_remains_a_fallback(monkeypatch):
+    monkeypatch.delenv("PUBBA_POWER_API_BASE_URL", raising=False)
+    monkeypatch.setenv("ONLY1_API_BASE_URL", "https://legacy.example.test/")
+
+    client = Only1ApiClient()
+
+    assert client.base_url == "https://legacy.example.test"
+
+
+def test_explicit_local_api_url_remains_supported(monkeypatch):
+    monkeypatch.delenv("PUBBA_POWER_API_BASE_URL", raising=False)
     monkeypatch.delenv("ONLY1_API_BASE_URL", raising=False)
-    with pytest.raises(DashboardApiError, match="ONLY1_API_BASE_URL"):
+
+    assert Only1ApiClient("http://localhost:8000/").base_url == "http://localhost:8000"
+
+
+def test_client_configuration_is_required(monkeypatch):
+    monkeypatch.delenv("PUBBA_POWER_API_BASE_URL", raising=False)
+    monkeypatch.delenv("ONLY1_API_BASE_URL", raising=False)
+    with pytest.raises(DashboardApiError, match="PUBBA_POWER_API_BASE_URL"):
         Only1ApiClient()
+
+
+def test_dashboard_module_import_does_not_make_network_call(monkeypatch):
+    def unexpected_request(*args, **kwargs):
+        raise AssertionError("dashboard import performed a network request")
+
+    monkeypatch.setattr(requests, "request", unexpected_request)
+    import dashboard.app
+
+    assert callable(dashboard.app.main)

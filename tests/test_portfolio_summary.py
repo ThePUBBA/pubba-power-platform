@@ -14,7 +14,7 @@ from services.portfolio_summary import (
 PORTFOLIO = {
     "id": "portfolio-only1",
     "code": "ONLY1",
-    "name": "Only1 Power",
+    "name": "PUBBA Power",
     "default_market": "CAISO",
     "reporting_timezone": "America/Los_Angeles",
     "currency_code": "USD",

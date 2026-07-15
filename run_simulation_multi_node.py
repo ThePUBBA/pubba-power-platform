@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Only1 Power — run_simulation_multi_node.py (POC, DAM bulk + RTM optional)
+PUBBA Power — run_simulation_multi_node.py (POC, DAM bulk + RTM optional)
 - POC default: --market dam, pulls ALL once/day then filters (fewer API calls, avoids 429)
 - --yesterday / --date supported; RTM optional with --market rtm
 - Simple threshold sim + Plotly reports
@@ -65,7 +65,7 @@ def plot_node(node: str, prices: pd.DataFrame, res: dict, th: Thresholds):
         fig.add_trace(go.Scatter(x=prices["timestamp"], y=prices["lmp"], name="LMP ($/MWh)", line=dict(color="#2a6efb")))
     fig.add_hline(y=th.charge_lmp, line_dash="dash", line_color="#22c55e", annotation_text="Charge TH")
     fig.add_hline(y=th.discharge_lmp, line_dash="dash", line_color="#ef4444", annotation_text="Discharge TH")
-    title=f"Only1 — {node} | Profit ${res.get('profit',0):,.2f} | Util {res.get('utilization_pct',0):.1f}%"
+    title=f"PUBBA Power — {node} | Profit ${res.get('profit',0):,.2f} | Util {res.get('utilization_pct',0):.1f}%"
     fig.update_layout(title=title, xaxis_title="Time (UTC)", yaxis_title="LMP ($/MWh)", template="plotly_white")
     return fig
 
@@ -77,9 +77,9 @@ def save_multi(results: Dict[str, dict], out_dir: Path) -> Path:
     path = out_dir / f"multi_node_lmp_{ts}.html"
     rows = [{"node":n, "profit":r.get("profit",0.0), "utilization_pct": r.get("utilization_pct",0.0)} for n,r in results.items()]
     df = pd.DataFrame(rows)
-    html = f"""<html><head><meta charset='utf-8'><title>Only1 Multi-Node</title></head>
+    html = f"""<html><head><meta charset='utf-8'><title>PUBBA Power Multi-Node</title></head>
     <body style='font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;'>
-      <h2>Only1 Power — Multi-Node Summary</h2>
+      <h2>PUBBA Power — Multi-Node Summary</h2>
       {df.to_html(index=False, float_format=lambda x: f"${x:,.2f}" if isinstance(x,(int,float)) else x)}
     </body></html>"""
     path.write_text(html); return path
@@ -89,7 +89,7 @@ def parse_date(d: str) -> datetime:
     return datetime(y,m,day,tzinfo=timezone.utc)
 
 def main():
-    p = argparse.ArgumentParser(description="Only1 multi-node sim (POC bulk DAM, RTM optional)")
+    p = argparse.ArgumentParser(description="PUBBA Power multi-node sim (POC bulk DAM, RTM optional)")
     p.add_argument("--nodes", type=str, default=os.getenv("ONLY1_NODES","MPBBAC,MPBNCA,MPBPGE"))
     p.add_argument("--market", choices=["dam","rtm"], default=os.getenv("ONLY1_MARKET","dam"))
     p.add_argument("--live", action="store_true")

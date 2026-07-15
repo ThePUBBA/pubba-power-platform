@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Only1 Power — oasis_client.py (robust, with retry + bulk DAM)
+PUBBA Power — oasis_client.py (robust, with retry + bulk DAM)
 - RTM 5-min: PRC_INTVL_LMP (version=2) -> try node=...
 - DAM hourly: PRC_LMP (version=12) -> bulk via grp_type=ALL once/day, then filter
 - Retries 429 with exponential backoff

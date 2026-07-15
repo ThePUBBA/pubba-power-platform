@@ -431,7 +431,7 @@ def test_health_endpoint_returns_service_and_supabase_status(monkeypatch):
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "ok"
-    assert body["service_name"] == "Only1 LMP API"
+    assert body["service_name"] == "PUBBA Power API"
     assert body["api_version"] == "1.0.0"
     assert body["current_utc_timestamp"].endswith(("Z", "+00:00"))
     assert body["supabase_connectivity_status"] == "connected"
@@ -460,7 +460,7 @@ def test_portfolio_summary_endpoint_returns_supabase_metrics(monkeypatch):
         "build_portfolio_summary",
         lambda **kwargs: {
             "portfolio": {
-                "id": "portfolio-1", "code": "ONLY1", "name": "Only1 Power",
+                "id": "portfolio-1", "code": "ONLY1", "name": "PUBBA Power",
                 "default_market": "CAISO",
                 "reporting_timezone": "America/Los_Angeles", "currency_code": "USD",
             },
@@ -743,6 +743,34 @@ def test_cors_allows_only_configured_origins(monkeypatch):
     assert allowed.headers["access-control-allow-origin"] == "https://only1.retool.com"
     assert "PATCH" in allowed.headers["access-control-allow-methods"]
     assert "access-control-allow-origin" not in denied.headers
+
+
+def test_cors_parses_pubba_and_retool_origins_with_whitespace(monkeypatch):
+    import main
+
+    monkeypatch.setenv(
+        "ALLOWED_ORIGINS",
+        " , https://pubbapower.com,  https://www.pubbapower.com , "
+        "https://app.pubbapower.com, ,https://only1.retool.com, ",
+    )
+
+    assert main._allowed_origins() == [
+        "https://pubbapower.com",
+        "https://www.pubbapower.com",
+        "https://app.pubbapower.com",
+        "https://only1.retool.com",
+    ]
+    client = TestClient(main.create_app())
+    for origin in main._allowed_origins():
+        response = client.options(
+            "/simulate",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+        assert response.status_code == 200
+        assert response.headers["access-control-allow-origin"] == origin
 
 
 def test_cors_does_not_default_to_wildcard(monkeypatch):

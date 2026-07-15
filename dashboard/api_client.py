@@ -16,6 +16,19 @@ REQUIRED_SUMMARY_SECTIONS = {
 }
 
 
+def _configured_api_base_url(explicit_url: str | None = None) -> str:
+    """Resolve the dashboard API URL while preserving the legacy variable."""
+    candidates = (
+        explicit_url,
+        os.getenv("PUBBA_POWER_API_BASE_URL"),
+        os.getenv("ONLY1_API_BASE_URL"),
+    )
+    for candidate in candidates:
+        if candidate and candidate.strip():
+            return candidate.strip()
+    return ""
+
+
 class DashboardApiError(RuntimeError):
     """Safe operator-facing API failure."""
 
@@ -32,10 +45,11 @@ class Only1ApiClient:
         timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
         session: Any = requests,
     ) -> None:
-        configured_url = base_url or os.getenv("ONLY1_API_BASE_URL", "")
-        if not configured_url.strip():
+        configured_url = _configured_api_base_url(base_url)
+        if not configured_url:
             raise DashboardApiError(
-                "Backend URL is not configured. Set ONLY1_API_BASE_URL.",
+                "Backend URL is not configured. Set PUBBA_POWER_API_BASE_URL "
+                "or ONLY1_API_BASE_URL.",
                 code="not_configured",
             )
         self.base_url = configured_url.rstrip("/")

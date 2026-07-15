@@ -35,7 +35,11 @@ from simulation import StorageSimulationError, simulate_storage_profit
 from services.portfolio_summary import PortfolioSummaryError, build_portfolio_summary
 
 
-SERVICE_NAME = "Only1 LMP API"
+SERVICE_NAME = "PUBBA Power API"
+SERVICE_DESCRIPTION = (
+    "PUBBA Power API for electricity trading, energy storage portfolio "
+    "operations, optimization, and grid services."
+)
 API_VERSION = "1.0.0"
 logger = logging.getLogger(__name__)
 
@@ -350,7 +354,11 @@ def _validate_date_range(start_date: date | None, end_date: date | None) -> None
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title=SERVICE_NAME, version=API_VERSION)
+    app = FastAPI(
+        title=SERVICE_NAME,
+        description=SERVICE_DESCRIPTION,
+        version=API_VERSION,
+    )
     origins = _allowed_origins()
     if origins:
         app.add_middleware(
@@ -392,7 +400,7 @@ def create_app() -> FastAPI:
 
     @app.get("/")
     def root():
-        return {"message": "Only1 LMP API is running"}
+        return {"message": "PUBBA Power API is running"}
 
     @app.get("/health", response_model=HealthResponse)
     def health():
