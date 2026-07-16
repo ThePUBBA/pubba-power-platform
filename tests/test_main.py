@@ -431,7 +431,7 @@ def test_health_endpoint_returns_service_and_supabase_status(monkeypatch):
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "ok"
-    assert body["service_name"] == "Only1 LMP API"
+    assert body["service_name"] == "PUBBA Power API"
     assert body["api_version"] == "1.0.0"
     assert body["current_utc_timestamp"].endswith(("Z", "+00:00"))
     assert body["supabase_connectivity_status"] == "connected"
@@ -457,24 +457,47 @@ def test_portfolio_summary_endpoint_returns_supabase_metrics(monkeypatch):
 
     monkeypatch.setattr(
         main,
-        "get_portfolio_summary",
-        lambda: {
-            "total_assets": 3,
-            "active_assets": 2,
-            "total_simulations": 12,
-            "total_dispatches": 8,
-            "cumulative_revenue": 10000,
-            "cumulative_charging_cost": 4000,
-            "cumulative_storage_cost": 1000,
-            "cumulative_net_profit": 5000,
+        "build_portfolio_summary",
+        lambda **kwargs: {
+            "portfolio": {
+                "id": "portfolio-1", "code": "ONLY1", "name": "PUBBA Power",
+                "default_market": "CAISO",
+                "reporting_timezone": "America/Los_Angeles", "currency_code": "USD",
+            },
+            "period": {
+                "start_at": None, "end_at": "2026-07-14T12:00:00Z",
+                "timezone": "America/Los_Angeles",
+            },
+            "financial": {
+                "gross_revenue": 10000, "charging_cost": 4000,
+                "net_profit": 5000, "total_portfolio_profit": 5000,
+                "trading_return": 1.25, "weighted_average_spread_per_mwh": 60,
+            },
+            "period_revenue": {
+                "today": 100, "week": 200, "month": 300,
+                "quarter": 400, "year": 500,
+            },
+            "operations": {
+                "total_dispatches": 8, "purchased_energy_mwh": 100,
+                "sold_energy_mwh": 80, "energy_throughput_mwh": 180,
+                "last_dispatch_at": "2026-07-14T10:00:00Z",
+            },
+            "fleet": {
+                "active_assets": 2, "power_capacity_mw": 20,
+                "energy_capacity_mwh": 80,
+            },
+            "metadata": {
+                "metric_version": "1.0", "data_freshness_at": "2026-07-14T10:00:00Z",
+                "generated_at": "2026-07-14T12:00:00Z",
+            },
         },
     )
 
     response = TestClient(main.app).get("/portfolio/summary")
 
     assert response.status_code == 200
-    assert response.json()["total_assets"] == 3
-    assert response.json()["cumulative_net_profit"] == 5000
+    assert response.json()["portfolio"]["code"] == "ONLY1"
+    assert response.json()["financial"]["net_profit"] == "5000"
 
 
 def test_portfolio_assets_endpoint_returns_asset_performance(monkeypatch):
@@ -698,13 +721,13 @@ def test_cors_allows_only_configured_origins(monkeypatch):
 
     monkeypatch.setenv(
         "ALLOWED_ORIGINS",
-        "https://only1.retool.com, https://dashboard.only1power.com",
+        "https://pubba.retool.com, https://app.pubbapower.com",
     )
     client = TestClient(main.create_app())
     allowed = client.options(
         "/simulate",
         headers={
-            "Origin": "https://only1.retool.com",
+            "Origin": "https://pubba.retool.com",
             "Access-Control-Request-Method": "POST",
         },
     )
@@ -717,9 +740,37 @@ def test_cors_allows_only_configured_origins(monkeypatch):
     )
 
     assert allowed.status_code == 200
-    assert allowed.headers["access-control-allow-origin"] == "https://only1.retool.com"
+    assert allowed.headers["access-control-allow-origin"] == "https://pubba.retool.com"
     assert "PATCH" in allowed.headers["access-control-allow-methods"]
     assert "access-control-allow-origin" not in denied.headers
+
+
+def test_cors_parses_pubba_and_retool_origins_with_whitespace(monkeypatch):
+    import main
+
+    monkeypatch.setenv(
+        "ALLOWED_ORIGINS",
+        " , https://pubbapower.com,  https://www.pubbapower.com , "
+        "https://app.pubbapower.com, ,https://pubba.retool.com, ",
+    )
+
+    assert main._allowed_origins() == [
+        "https://pubbapower.com",
+        "https://www.pubbapower.com",
+        "https://app.pubbapower.com",
+        "https://pubba.retool.com",
+    ]
+    client = TestClient(main.create_app())
+    for origin in main._allowed_origins():
+        response = client.options(
+            "/simulate",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+        assert response.status_code == 200
+        assert response.headers["access-control-allow-origin"] == origin
 
 
 def test_cors_does_not_default_to_wildcard(monkeypatch):

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Only1 Power — run_from_csv_date.py (latest-only + auto-open + auto-refresh)
+PUBBA Power — run_from_csv_date.py (latest-only + auto-open + auto-refresh)
 
 Reads local CSVs:
   data/lmp_<NODE>_<YYYY-MM-DD>.csv  (columns: timestamp,lmp or auto-detected)
@@ -284,7 +284,7 @@ def plot_node(node: str, df: pd.DataFrame, res: Dict, th: Thresholds, out_dir: P
     fig.update_layout(
         title={
             "text": (
-                f"Only1 Power — {node} | Profit: ${res.get('profit',0):,.2f} "
+                f"PUBBA Power — {node} | Profit: ${res.get('profit',0):,.2f} "
                 f"| Utilization: {res.get('utilization_pct',0):.1f}%"
                 f"<br><sup>{subtitle}</sup>"
             ),
@@ -299,7 +299,7 @@ def plot_node(node: str, df: pd.DataFrame, res: Dict, th: Thresholds, out_dir: P
         margin=dict(t=120),
     )
 
-    return _render_fig(fig, f"Only1 — {node}", path, auto_refresh_sec)
+    return _render_fig(fig, f"PUBBA Power — {node}", path, auto_refresh_sec)
 
 def save_multi(results: Dict[str, Dict], out_dir: Path, ts: str, auto_refresh_sec: int) -> Path:
     path = _multi_table_path(out_dir, ts)
@@ -322,7 +322,7 @@ def save_multi(results: Dict[str, Dict], out_dir: Path, ts: str, auto_refresh_se
             return x
 
     table_html = tbl.to_html(index=False, formatters={"profit": money, "util%": pct})
-    html = _wrap_html("Only1 Multi-Node", "<h2>Only1 Power — Multi-Node Summary</h2>" + table_html, auto_refresh_sec)
+    html = _wrap_html("PUBBA Power Multi-Node", "<h2>PUBBA Power — Multi-Node Summary</h2>" + table_html, auto_refresh_sec)
     path.write_text(html)
     return path
 
@@ -341,7 +341,7 @@ def save_multi_prices(prices: Dict[str, pd.DataFrame], out_dir: Path, th: Thresh
     fig.add_hline(y=th.discharge_lmp, line_dash="dash", line_color="#ef4444", annotation_text="Discharge TH")
 
     fig.update_layout(
-        title={"text": "Only1 Power — Multi-Node LMPs", "x": 0.01},
+        title={"text": "PUBBA Power — Multi-Node LMPs", "x": 0.01},
         xaxis_title="Time (UTC)",
         yaxis_title="LMP ($/MWh)",
         height=420,
@@ -350,11 +350,11 @@ def save_multi_prices(prices: Dict[str, pd.DataFrame], out_dir: Path, th: Thresh
         margin=dict(t=80)
     )
 
-    return _render_fig(fig, "Only1 — Multi-Node LMPs", path, auto_refresh_sec)
+    return _render_fig(fig, "PUBBA Power — Multi-Node LMPs", path, auto_refresh_sec)
 
 # ---------- Main ----------
 def main():
-    ap = argparse.ArgumentParser(description="Only1 — Run sim from local CSVs for a given date (no network)")
+    ap = argparse.ArgumentParser(description="PUBBA Power — Run sim from local CSVs for a given date (no network)")
     ap.add_argument("--date", required=True, help="UTC date like 2025-08-09")
     ap.add_argument("--nodes", default="MPBBAC,MPBNCA,MPBPGE")
     ap.add_argument("--data-dir", default="data")

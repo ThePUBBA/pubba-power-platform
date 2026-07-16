@@ -63,6 +63,18 @@ def simulation_result():
     }
 
 
+def default_portfolio():
+    return {
+        "id": "11111111-1111-1111-1111-111111111111",
+        "code": "ONLY1",
+        "name": "PUBBA Power",
+        "default_market": "CAISO",
+        "reporting_timezone": "America/Los_Angeles",
+        "currency_code": "USD",
+        "status": "active",
+    }
+
+
 def test_missing_configuration_fails_clearly(monkeypatch):
     monkeypatch.delenv("SUPABASE_URL", raising=False)
     monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
@@ -91,6 +103,67 @@ def test_migration_defines_authoritative_schema_integrity():
     assert "foreign key (asset_id) references public.assets(asset_id)" in sql
     assert "foreign key (simulation_id) references public.simulation_results(id)" in sql
     assert "dispatch_events_timestamp_id_idx" in sql
+
+
+def test_portfolio_migration_is_idempotent_and_backfills_before_not_null():
+    sql = Path(
+        "supabase/migrations/202607140001_portfolio_schema_foundation.sql"
+    ).read_text()
+
+    assert "create table if not exists public.portfolios" in sql
+    assert "on conflict (code) do nothing" in sql
+    assert sql.count("where portfolio_id is null") == 3
+    for table in ("assets", "simulation_results", "dispatch_events"):
+        assert f"alter table public.{table} alter column portfolio_id set not null" in sql
+        assert sql.index(f"update public.{table}\n    set portfolio_id") < sql.index(
+            f"alter table public.{table} alter column portfolio_id set not null"
+        )
+    assert "assets_revision_positive_check" in sql
+    assert "status <> 'retired' or retired_at is not null" in sql
+    assert "assets_set_updated_at" not in sql
+
+
+def test_summary_input_migration_backfills_auditable_energy_and_price_inputs():
+    sql = Path(
+        "supabase/migrations/202607140002_portfolio_summary_inputs.sql"
+    ).read_text()
+
+    for column in (
+        "purchased_energy_mwh", "sold_energy_mwh",
+        "average_buy_price_per_mwh", "average_sell_price_per_mwh",
+    ):
+        assert f"add column if not exists {column}" in sql
+    assert "d.energy_mwh / s.round_trip_efficiency" in sql
+    assert "charging_cost / purchased_energy_mwh" in sql
+    assert "discharge_revenue / sold_energy_mwh" in sql
+    assert "dispatch_events_portfolio_status_timestamp_idx" in sql
+
+
+def test_default_portfolio_resolves_by_stable_code(monkeypatch):
+    captured = {}
+
+    def request(method, table, params=None, **kwargs):
+        captured.update(method=method, table=table, params=params)
+        return [default_portfolio()]
+
+    monkeypatch.setattr(supabase, "_request", request)
+
+    assert supabase.get_default_portfolio()["id"] == default_portfolio()["id"]
+    assert captured["table"] == "portfolios"
+    assert captured["params"]["code"] == "eq.ONLY1"
+
+
+def test_missing_default_portfolio_fails_clearly(monkeypatch):
+    monkeypatch.setattr(supabase, "_request", lambda *args, **kwargs: [])
+
+    try:
+        supabase.get_default_portfolio()
+    except supabase.MissingDefaultPortfolioError as exc:
+        assert exc.error_code == "missing_default_portfolio"
+        assert exc.status_code == 503
+        assert exc.operation == "resolve_default_portfolio"
+    else:
+        raise AssertionError("Expected MissingDefaultPortfolioError")
 
 
 def test_request_uses_supabase_service_role_without_exposing_it(monkeypatch):
@@ -146,13 +219,12 @@ def test_request_rejects_malformed_supabase_response(monkeypatch):
 
 
 def test_duplicate_asset_is_rejected(monkeypatch):
-    monkeypatch.setattr(
-        supabase,
-        "_request",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            supabase.SupabaseError("duplicate", status_code=409)
-        ),
-    )
+    def request(method, table, **kwargs):
+        if table == "portfolios":
+            return [default_portfolio()]
+        raise supabase.SupabaseError("duplicate", status_code=409)
+
+    monkeypatch.setattr(supabase, "_request", request)
 
     try:
         supabase.create_asset({"asset_id": "BAT-001", "asset_name": "Battery"})
@@ -175,6 +247,25 @@ def test_derived_idempotency_key_is_stable_for_identical_simulation():
     assert first.startswith("auto:")
 
 
+def test_new_asset_automatically_receives_default_portfolio(monkeypatch):
+    captured = {}
+
+    def request(method, table, json_body=None, **kwargs):
+        if table == "portfolios":
+            return [default_portfolio()]
+        if table == "assets" and method == "post":
+            captured.update(json_body)
+            return [json_body]
+        raise AssertionError((method, table))
+
+    monkeypatch.setattr(supabase, "_request", request)
+
+    created = supabase.create_asset({"asset_id": "BAT-001", "asset_name": "Battery"})
+
+    assert captured["portfolio_id"] == default_portfolio()["id"]
+    assert created["portfolio_id"] == default_portfolio()["id"]
+
+
 def test_persistence_retry_does_not_duplicate_dispatch_and_preserves_foreign_keys(
     monkeypatch,
 ):
@@ -183,6 +274,8 @@ def test_persistence_retry_does_not_duplicate_dispatch_and_preserves_foreign_key
     asset = {"id": "asset-uuid", "asset_id": "BAT-001"}
 
     def request(method, table, params=None, json_body=None, prefer=None):
+        if table == "portfolios" and method == "get":
+            return [default_portfolio()]
         if table == "simulation_results" and method == "get":
             key = params["external_simulation_id"].removeprefix("eq.")
             return [simulations[key]] if key in simulations else []
@@ -215,11 +308,13 @@ def test_persistence_retry_does_not_duplicate_dispatch_and_preserves_foreign_key
     assert simulation["external_simulation_id"] == "run-1"
     assert simulation["asset_id"] == "BAT-001"
     assert simulation["storage_fee_per_mwh"] == 5
+    assert simulation["portfolio_id"] == default_portfolio()["id"]
     assert "idempotency_key" not in simulation
     dispatch = next(iter(dispatches.values()))
     assert dispatch["asset_id"] == "BAT-001"
     assert dispatch["simulation_id"] == first["simulation_id"]
     assert dispatch["dispatch_id"] == f"dispatch:{first['simulation_id']}"
+    assert dispatch["portfolio_id"] == default_portfolio()["id"]
 
 
 def test_missing_asset_saves_simulation_without_fake_dispatch(monkeypatch):
@@ -227,6 +322,8 @@ def test_missing_asset_saves_simulation_without_fake_dispatch(monkeypatch):
 
     def request(method, table, params=None, json_body=None, prefer=None):
         calls.append((method, table))
+        if table == "portfolios" and method == "get":
+            return [default_portfolio()]
         if table == "simulation_results" and method == "get":
             return []
         if table == "simulation_results" and method == "post":
@@ -248,6 +345,8 @@ def test_missing_asset_saves_simulation_without_fake_dispatch(monkeypatch):
 
 def test_failed_simulation_archival_has_structured_error(monkeypatch):
     def request(method, table, params=None, json_body=None, prefer=None):
+        if table == "portfolios" and method == "get":
+            return [default_portfolio()]
         if table == "simulation_results" and method == "get":
             return []
         if table == "simulation_results" and method == "post":
@@ -269,6 +368,8 @@ def test_failed_simulation_archival_has_structured_error(monkeypatch):
 
 def test_dispatch_failure_is_visible_after_simulation_archival(monkeypatch):
     def request(method, table, params=None, json_body=None, prefer=None):
+        if table == "portfolios" and method == "get":
+            return [default_portfolio()]
         if table == "simulation_results" and method == "get":
             return []
         if table == "simulation_results" and method == "post":
@@ -346,6 +447,33 @@ def test_dispatch_filters_and_stable_pagination_are_forwarded(monkeypatch):
     assert captured["offset"] == 50
     assert "dispatch_timestamp.gte.2025-07-01" in captured["and"]
     assert "dispatch_timestamp.lt.2025-08-01" in captured["and"]
+
+
+def test_summary_repository_queries_only_resolved_portfolio_and_active_fleet(
+    monkeypatch,
+):
+    calls = []
+
+    def list_all(table, params=None):
+        calls.append((table, params))
+        return []
+
+    monkeypatch.setattr(supabase, "_list_all", list_all)
+
+    supabase.get_portfolio_summary_records(default_portfolio())
+
+    assert len(calls) == 2
+    assert all(
+        params["portfolio_id"] == f"eq.{default_portfolio()['id']}"
+        for _, params in calls
+    )
+    asset_params = next(params for table, params in calls if table == "assets")
+    dispatch_params = next(
+        params for table, params in calls if table == "dispatch_events"
+    )
+    assert asset_params["status"] == "eq.active"
+    assert "status.eq.completed" in dispatch_params["or"]
+    assert "status.eq.simulated" in dispatch_params["or"]
 
 
 def test_asset_performance_includes_zero_dispatch_assets(monkeypatch):
