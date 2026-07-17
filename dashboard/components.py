@@ -7,7 +7,11 @@ def install_console_theme(st) -> None:
     st.markdown(
         """
         <style>
+        @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&display=swap');
+
         :root {
+            --font-display: "Bebas Neue", "Arial Narrow", Arial, sans-serif;
+            --font-body: Inter, Arial, Helvetica, sans-serif;
             --pubba-accent: #44FFBB;
             --pubba-bg: #000000;
             --pubba-surface: #0F0F0F;
@@ -20,10 +24,12 @@ def install_console_theme(st) -> None:
         }
         html, body, [class*="css"] {
             color: var(--pubba-text);
+            font-family: var(--font-body);
         }
         .stApp {
             background: var(--pubba-bg);
             color: var(--pubba-text);
+            font-family: var(--font-body);
         }
         [data-testid="stAppViewContainer"] > .main {
             background: var(--pubba-bg);
@@ -57,9 +63,11 @@ def install_console_theme(st) -> None:
             align-items: center;
             gap: .65rem;
             color: var(--pubba-text);
-            font-size: 1.05rem;
-            font-weight: 750;
-            letter-spacing: -.02em;
+            font-family: var(--font-display);
+            font-size: 1.4rem;
+            font-weight: 400;
+            letter-spacing: .025em;
+            line-height: 1;
         }
         .pubba-brand-bolt {
             width: 2rem;
@@ -78,6 +86,7 @@ def install_console_theme(st) -> None:
             letter-spacing: .09em;
             margin-top: .65rem;
             text-transform: uppercase;
+            font-family: var(--font-display);
         }
         [data-testid="stSidebar"] [role="radiogroup"] {
             gap: .35rem;
@@ -87,6 +96,10 @@ def install_console_theme(st) -> None:
             border-radius: 10px;
             padding: .62rem .7rem;
             transition: background .16s ease, border-color .16s ease;
+            font-family: var(--font-display);
+            font-size: 1rem;
+            letter-spacing: .025em;
+            text-transform: uppercase;
         }
         [data-testid="stSidebar"] [role="radiogroup"] label:hover {
             background: #141414;
@@ -133,13 +146,16 @@ def install_console_theme(st) -> None:
             letter-spacing: .12em;
             text-transform: uppercase;
             margin-bottom: .65rem;
+            font-family: var(--font-display);
+            font-weight: 400;
         }
         .pubba-title {
             color: var(--pubba-text);
             font-size: clamp(2rem, 4vw, 3rem);
-            line-height: 1.06;
-            font-weight: 720;
-            letter-spacing: -.045em;
+            font-family: var(--font-display);
+            line-height: 1;
+            font-weight: 400;
+            letter-spacing: .015em;
             margin: 0;
         }
         .pubba-description {
@@ -148,6 +164,7 @@ def install_console_theme(st) -> None:
             line-height: 1.55;
             margin-top: .7rem;
             max-width: 680px;
+            font-family: var(--font-body);
         }
         .pubba-badge {
             display: inline-flex;
@@ -160,7 +177,10 @@ def install_console_theme(st) -> None:
             border-radius: 999px;
             padding: .42rem .7rem;
             font-size: .72rem;
-            font-weight: 650;
+            font-family: var(--font-display);
+            font-weight: 400;
+            letter-spacing: .035em;
+            text-transform: uppercase;
         }
         .pubba-badge::before {
             content: "";
@@ -177,9 +197,12 @@ def install_console_theme(st) -> None:
         }
         .pubba-section-title {
             color: var(--pubba-text);
-            font-size: 1rem;
-            font-weight: 650;
-            letter-spacing: -.015em;
+            font-family: var(--font-display);
+            font-size: 1.2rem;
+            font-weight: 400;
+            letter-spacing: .025em;
+            line-height: 1.1;
+            text-transform: uppercase;
         }
         .pubba-section-line {
             height: 1px;
@@ -203,16 +226,18 @@ def install_console_theme(st) -> None:
         .pubba-kpi-label {
             color: var(--pubba-muted);
             font-size: .7rem;
-            font-weight: 650;
+            font-family: var(--font-display);
+            font-weight: 400;
             text-transform: uppercase;
             letter-spacing: .075em;
         }
         .pubba-kpi-value {
             color: var(--pubba-text);
             font-size: clamp(1.3rem, 2vw, 1.75rem);
-            line-height: 1.15;
-            font-weight: 700;
-            letter-spacing: -.035em;
+            font-family: var(--font-display);
+            line-height: 1.05;
+            font-weight: 400;
+            letter-spacing: .01em;
             margin-top: .8rem;
             overflow-wrap: anywhere;
         }
@@ -249,7 +274,11 @@ def install_console_theme(st) -> None:
         .stButton > button, .stFormSubmitButton > button {
             min-height: 2.65rem;
             border-radius: 10px;
-            font-weight: 680;
+            font-family: var(--font-display);
+            font-size: 1rem;
+            font-weight: 400;
+            letter-spacing: .035em;
+            text-transform: uppercase;
             border: 1px solid var(--pubba-border);
             transition: transform .15s ease, border-color .15s ease, opacity .15s ease;
         }
@@ -274,12 +303,14 @@ def install_console_theme(st) -> None:
         [data-testid="stAlert"] {
             border-radius: 12px;
             border: 1px solid var(--pubba-border);
+            font-family: var(--font-body);
         }
         [data-testid="stDataFrame"], [data-testid="stTable"] {
             border: 1px solid var(--pubba-border);
             border-radius: var(--pubba-radius);
             overflow: hidden;
             background: var(--pubba-card);
+            font-family: var(--font-body);
         }
         [data-testid="stPlotlyChart"] {
             background: var(--pubba-card);
@@ -290,6 +321,15 @@ def install_console_theme(st) -> None:
         hr { border-color: var(--pubba-border) !important; }
         small, .stCaption, [data-testid="stCaptionContainer"] {
             color: var(--pubba-muted) !important;
+            font-family: var(--font-body) !important;
+        }
+        input, textarea, [data-baseweb="select"] {
+            font-family: var(--font-body) !important;
+        }
+        [data-testid="stWidgetLabel"] p {
+            font-family: var(--font-display);
+            font-size: .95rem;
+            letter-spacing: .02em;
         }
         @media (max-width: 768px) {
             .block-container { padding: 2rem 1rem 3rem; }
