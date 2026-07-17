@@ -54,6 +54,27 @@ def format_date(value: object, *, fallback: str = "Not available") -> str:
         return fallback
 
 
+def format_chart_time_tick(
+    value: object,
+    timezone_name: str,
+    *,
+    fallback: str = "Not available",
+) -> str:
+    """Format chart time ticks, including the date only at local midnight."""
+    if not value:
+        return fallback
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        local = parsed.astimezone(ZoneInfo(timezone_name))
+        hour = local.strftime("%I").lstrip("0") or "12"
+        time_label = f'{hour}{local.strftime(":%M %p")}'
+        if local.hour == 0 and local.minute == 0:
+            return f'{time_label}<br>{local.strftime("%b %d, %Y")}'
+        return time_label
+    except (ValueError, TypeError):
+        return fallback
+
+
 def format_timestamp(
     value: object,
     timezone_name: str,

@@ -7,6 +7,7 @@ import requests
 from dashboard.api_client import DashboardApiError, Only1ApiClient
 from dashboard.formatting import (
     format_currency,
+    format_chart_time_tick,
     format_date,
     format_dispatch_timestamp,
     format_energy,
@@ -191,6 +192,15 @@ def test_timestamp_formatting_converts_reporting_timezone_and_handles_null():
 def test_date_formatting_matches_dashboard_labels():
     assert format_date("2026-07-11") == "Jul 11, 2026"
     assert format_date(None) == "Not available"
+
+
+def test_chart_time_tick_only_shows_date_at_midnight():
+    assert format_chart_time_tick(
+        "2026-07-17T00:00:00-07:00", "America/Los_Angeles"
+    ) == "12:00 AM<br>Jul 17, 2026"
+    assert format_chart_time_tick(
+        "2026-07-17T02:00:00-07:00", "America/Los_Angeles"
+    ) == "2:00 AM"
 
 
 def test_dispatch_timestamp_is_compact_and_omits_seconds():

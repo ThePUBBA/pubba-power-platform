@@ -17,6 +17,7 @@ from dashboard.components import (
 )
 from dashboard.formatting import (
     as_decimal,
+    format_chart_time_tick,
     format_currency,
     format_date,
     format_dispatch_timestamp,
@@ -65,6 +66,10 @@ def _market_section(st, data: dict, currency: str, zone: str) -> None:
         return
     values = [point["price_per_mwh"] for point in prices]
     market_times = [format_timestamp(point["timestamp"], zone) for point in prices]
+    tick_step = max(1, len(prices) // 8)
+    tick_values = [point["timestamp"] for point in prices[::tick_step]]
+    if prices[-1]["timestamp"] not in tick_values:
+        tick_values.append(prices[-1]["timestamp"])
     fig = go.Figure(go.Scatter(
         x=[point["timestamp"] for point in prices], y=values,
         customdata=market_times,
@@ -74,8 +79,9 @@ def _market_section(st, data: dict, currency: str, zone: str) -> None:
     current = values[-1]
     fig.update_xaxes(
         type="date",
-        tickformat="%I:%M %p<br>%b %d, %Y",
-        nticks=9,
+        tickmode="array",
+        tickvals=tick_values,
+        ticktext=[format_chart_time_tick(value, zone) for value in tick_values],
     )
     fig.add_hline(y=current, line_dash="dot", line_color=GRAY)
     fig = style_chart(
