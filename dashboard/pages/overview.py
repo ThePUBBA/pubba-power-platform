@@ -18,6 +18,7 @@ from dashboard.components import (
 from dashboard.formatting import (
     as_decimal,
     format_currency,
+    format_date,
     format_dispatch_timestamp,
     format_energy,
     format_power,
@@ -63,14 +64,16 @@ def _market_section(st, data: dict, currency: str, zone: str) -> None:
         st.info("CAISO market data is unavailable. No price is inferred or presented as live.")
         return
     values = [point["price_per_mwh"] for point in prices]
+    market_times = [format_timestamp(point["timestamp"], zone) for point in prices]
     fig = go.Figure(go.Scatter(
-        x=[point["timestamp"] for point in prices], y=values,
-        customdata=[format_timestamp(point["timestamp"], zone) for point in prices],
+        x=market_times, y=values,
+        customdata=market_times,
         line={"color": MINT, "width": 3}, name="CAISO RTM LMP",
         hovertemplate="%{customdata}<br>$%{y:,.2f}/MWh<extra></extra>",
     ))
     current = values[-1]
-    fig.add_hline(y=current, line_dash="dot", line_color=GRAY, annotation_text=f"Current ${current:,.2f}")
+    fig.update_xaxes(type="category")
+    fig.add_hline(y=current, line_dash="dot", line_color=GRAY)
     fig = style_chart(
         fig, title="CAISO market price curve",
         subtitle=f"{metadata.get('market_name', 'CAISO')} · {metadata.get('market_type', 'RTM')} · {metadata.get('market_location')}",
@@ -86,17 +89,18 @@ def _performance_section(st, data: dict, currency: str) -> None:
     if not daily:
         st.info("Completed dispatch history is required before portfolio performance trends can be displayed.")
         return
+    chart_daily = [{**row, "date": format_date(row.get("date"))} for row in daily]
     left, right = st.columns(2)
     one_point = len(daily) == 1
     note = "Single reporting date; additional dispatch history will create a trend." if one_point else "Completed dispatch ledger by reporting date."
     with left:
-        fig = trend_figure(daily, "revenue", name="Revenue", color=MINT, currency=True)
+        fig = trend_figure(chart_daily, "revenue", name="Revenue", color=MINT, currency=True)
         st.plotly_chart(style_chart(fig, title="Revenue over time", subtitle=note, y_title=f"{currency} ($)"), width="stretch")
     with right:
-        fig = trend_figure(daily, "profit", name="Profit", color=WHITE, currency=True)
+        fig = trend_figure(chart_daily, "profit", name="Profit", color=WHITE, currency=True)
         st.plotly_chart(style_chart(fig, title="Profit over time", subtitle=note, y_title=f"{currency} ($)"), width="stretch")
     fig = go.Figure(go.Bar(
-        x=[row["date"] for row in daily], y=[row["throughput_mwh"] for row in daily],
+        x=[row["date"] for row in chart_daily], y=[row["throughput_mwh"] for row in chart_daily],
         marker_color=MINT, name="Throughput", hovertemplate="%{x}<br>%{y:,.2f} MWh<extra></extra>",
     ))
     if one_point:

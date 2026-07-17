@@ -44,6 +44,16 @@ def format_trading_return(value: object) -> str:
     return f"{as_decimal(value) * Decimal('100'):,.2f}%"
 
 
+def format_date(value: object, *, fallback: str = "Not available") -> str:
+    """Format a date-only value consistently for labels and chart axes."""
+    if not value:
+        return fallback
+    try:
+        return datetime.fromisoformat(str(value)).strftime("%b %d, %Y")
+    except (ValueError, TypeError):
+        return fallback
+
+
 def format_timestamp(
     value: object,
     timezone_name: str,

@@ -88,10 +88,11 @@ def render(st, client: Only1ApiClient) -> None:
         fig = go.Figure()
         if charge_points:
             charge_times = [format_timestamp(p["timestamp"], "America/Los_Angeles") for p in charge_points]
-            fig.add_trace(go.Scatter(x=[p["timestamp"] for p in charge_points], y=[p["price"] for p in charge_points], customdata=charge_times, name="Charge window", line={"color": GRAY, "width": 3}, hovertemplate="%{customdata}<br>$%{y:,.2f}/MWh<extra></extra>"))
+            fig.add_trace(go.Scatter(x=charge_times, y=[p["price"] for p in charge_points], customdata=charge_times, name="Charge window", line={"color": GRAY, "width": 3}, hovertemplate="%{customdata}<br>$%{y:,.2f}/MWh<extra></extra>"))
         if discharge_points:
             discharge_times = [format_timestamp(p["timestamp"], "America/Los_Angeles") for p in discharge_points]
-            fig.add_trace(go.Scatter(x=[p["timestamp"] for p in discharge_points], y=[p["price"] for p in discharge_points], customdata=discharge_times, name="Discharge window", line={"color": MINT, "width": 3}, hovertemplate="%{customdata}<br>$%{y:,.2f}/MWh<extra></extra>"))
+            fig.add_trace(go.Scatter(x=discharge_times, y=[p["price"] for p in discharge_points], customdata=discharge_times, name="Discharge window", line={"color": MINT, "width": 3}, hovertemplate="%{customdata}<br>$%{y:,.2f}/MWh<extra></extra>"))
+        fig.update_xaxes(type="category")
         st.plotly_chart(style_chart(fig, title="Historical charge and discharge windows", subtitle=f"{market} · {location} · {simulation_date.isoformat()}", y_title="USD/MWh"), width="stretch")
 
     with st.expander("Simulation assumptions and classification"):

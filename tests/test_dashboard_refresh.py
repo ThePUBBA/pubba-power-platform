@@ -49,3 +49,4 @@ def test_single_point_trend_uses_categorical_axis():
     assert figure.layout.yaxis.tickprefix == "$"
     assert figure.layout.yaxis.tickformat == ",.2f"
     assert figure.data[0].mode == "markers"
+    assert list(figure.data[0].x) == ["2026-07-17"]
