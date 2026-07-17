@@ -127,6 +127,7 @@ def _market_section(st, data: dict, currency: str, zone: str) -> None:
         subtitle=f"{metadata.get('market_name', 'CAISO')} · {metadata.get('market_type', 'RTM')} · {metadata.get('market_location')}",
         y_title=f"{currency}/MWh", height=430,
     )
+    fig.update_layout(hovermode="closest")
     st.plotly_chart(fig, width="stretch")
     st.caption(f"Latest interval {format_timestamp(metadata.get('market_updated_at'), zone)}")
 
