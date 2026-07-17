@@ -88,5 +88,13 @@ def test_market_snapshot_is_live_when_present_and_honestly_unavailable_otherwise
 
     assert live["status"]["market_data"] == "connected"
     assert live["kpis"]["current_market_price_per_mwh"] == 42.5
+    assert live["metadata"]["market_statistics"] == {
+        "minimum_price_per_mwh": 42.5,
+        "maximum_price_per_mwh": 42.5,
+        "average_price_per_mwh": 42.5,
+        "price_spread_per_mwh": 0.0,
+    }
+    assert live["series"]["dispatches"][0]["charging_cost"] == 1000
+    assert live["series"]["dispatches"][0]["market"] is None
     assert unavailable["status"]["market_data"] == "unavailable"
     assert unavailable["series"]["market_prices"] == []

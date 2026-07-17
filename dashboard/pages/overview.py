@@ -1,13 +1,14 @@
-"""Live executive Overview Streamlit page."""
+"""Enterprise live executive operations dashboard."""
 
 from __future__ import annotations
 
-from decimal import Decimal
+from urllib.parse import quote
 
 import plotly.graph_objects as go
 
-from dashboard.api_client import DashboardApiError, Only1ApiClient
+from dashboard.charts import GRAY, MINT, WHITE, style_chart, trend_figure
 from dashboard.components import (
+    render_capabilities,
     render_data_freshness,
     render_error_state,
     render_kpi_card,
@@ -15,18 +16,8 @@ from dashboard.components import (
     render_section_header,
     render_system_status,
 )
-from dashboard.formatting import (
-    as_decimal,
-    format_currency,
-    format_power,
-    format_timestamp,
-)
-
-
-MINT = "#44FFBB"
-WHITE = "#FFFFFF"
-MUTED = "#A7A7A7"
-GRID = "#2A2A2A"
+from dashboard.formatting import as_decimal, format_currency, format_energy, format_power, format_timestamp
+from dashboard.refresh import refresh_dashboard_data
 
 
 def _tone(value: object) -> str:
@@ -34,142 +25,196 @@ def _tone(value: object) -> str:
     return "positive" if number > 0 else "negative" if number < 0 else "neutral"
 
 
-def _available(value: object, formatter) -> str:
-    return "Not available" if value is None else formatter(value)
-
-
-def _cards(st, cards: list[tuple[str, str, str]], columns: int = 3) -> None:
-    for start in range(0, len(cards), columns):
-        row = st.columns(columns)
-        for column, (label, value, tone) in zip(row, cards[start:start + columns]):
+def _cards(st, cards: list[dict]) -> None:
+    for start in range(0, len(cards), 3):
+        columns = st.columns(3)
+        for column, card in zip(columns, cards[start:start + 3]):
             with column:
-                render_kpi_card(st, label, value, tone=tone)
+                render_kpi_card(st, **card)
 
 
-def _layout(fig: go.Figure, title: str, y_title: str = "") -> go.Figure:
-    fig.update_layout(
-        title=title,
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font={"color": WHITE, "family": "Inter, Arial, sans-serif"},
-        margin={"l": 45, "r": 20, "t": 55, "b": 40},
-        hovermode="x unified",
-        legend={"orientation": "h", "y": 1.08, "x": 1, "xanchor": "right"},
-    )
-    fig.update_xaxes(gridcolor=GRID, zeroline=False)
-    fig.update_yaxes(gridcolor=GRID, zeroline=False, title=y_title)
-    return fig
+def _countdown(st) -> None:
+    html = """<div style="font:12px Inter,Arial;color:#A7A7A7;text-align:right">Next refresh in <b id="pubba-count" style="color:#44FFBB">60s</b></div>
+    <script>let n=60,e=document.getElementById('pubba-count');setInterval(()=>{n=n<=1?60:n-1;e.textContent=n+'s'},1000)</script>"""
+    st.iframe(f"data:text/html;charset=utf-8,{quote(html)}", height=24)
 
 
-def _empty_chart(st, title: str, message: str) -> None:
-    render_section_header(st, title)
-    st.info(message)
-
-
-def render(st, client: Only1ApiClient) -> None:
-    render_page_header(
-        st,
-        "Executive Operations",
-        "Live portfolio economics, dispatch activity, fleet capacity, and market intelligence.",
-        badge="Live data",
-    )
-    toolbar, refresh = st.columns([5, 1])
-    with toolbar:
-        timezone_name = st.text_input(
-            "Dashboard timezone override",
-            placeholder="Use portfolio default",
-            help="Optional IANA timezone, for example America/Denver.",
-        )
-    with refresh:
-        st.write("")
-        st.button("Refresh", type="primary", width="stretch")
-
-    try:
-        with st.spinner("Loading live executive data…"):
-            data = client.get_dashboard_summary(timezone_name=timezone_name or None)
-    except DashboardApiError as exc:
-        render_error_state(st, str(exc))
-        return
-
-    kpis = data["kpis"]
-    series = data["series"]
-    status = data["status"]
+def _market_section(st, data: dict, currency: str, zone: str) -> None:
+    render_section_header(st, "Market Intelligence")
+    prices = data["series"].get("market_prices", [])
     metadata = data["metadata"]
+    stats = metadata.get("market_statistics", {})
+    snapshot = [
+        ("Current", data["kpis"].get("current_market_price_per_mwh")),
+        ("Minimum", stats.get("minimum_price_per_mwh")),
+        ("Maximum", stats.get("maximum_price_per_mwh")),
+        ("Average", stats.get("average_price_per_mwh")),
+        ("Spread", stats.get("price_spread_per_mwh")),
+    ]
+    cols = st.columns(5)
+    for col, (label, value) in zip(cols, snapshot):
+        with col:
+            render_kpi_card(
+                st, label, "Not available" if value is None else f"{format_currency(value, currency)}/MWh",
+                subtitle=f"{metadata.get('market_type', 'RTM')} · {metadata.get('market_location', 'Unknown node')}",
+                tone="neutral", icon="↗",
+            )
+    if not prices:
+        st.info("CAISO market data is unavailable. No price is inferred or presented as live.")
+        return
+    values = [point["price_per_mwh"] for point in prices]
+    fig = go.Figure(go.Scatter(
+        x=[point["timestamp"] for point in prices], y=values,
+        line={"color": MINT, "width": 3}, name="CAISO RTM LMP",
+        hovertemplate="%{x|%b %d, %H:%M}<br>$%{y:,.2f}/MWh<extra></extra>",
+    ))
+    current = values[-1]
+    fig.add_hline(y=current, line_dash="dot", line_color=GRAY, annotation_text=f"Current ${current:,.2f}")
+    fig = style_chart(
+        fig, title="CAISO market price curve",
+        subtitle=f"{metadata.get('market_name', 'CAISO')} · {metadata.get('market_type', 'RTM')} · {metadata.get('market_location')}",
+        y_title=f"{currency}/MWh", height=430,
+    )
+    st.plotly_chart(fig, width="stretch")
+    st.caption(f"Latest interval {format_timestamp(metadata.get('market_updated_at'), zone)}")
+
+
+def _performance_section(st, data: dict, currency: str) -> None:
+    render_section_header(st, "Portfolio Performance")
+    daily = data["series"].get("daily", [])
+    if not daily:
+        st.info("Completed dispatch history is required before portfolio performance trends can be displayed.")
+        return
+    left, right = st.columns(2)
+    one_point = len(daily) == 1
+    note = "Single reporting date; additional dispatch history will create a trend." if one_point else "Completed dispatch ledger by reporting date."
+    with left:
+        fig = trend_figure(daily, "revenue", name="Revenue", color=MINT, currency=True)
+        st.plotly_chart(style_chart(fig, title="Revenue over time", subtitle=note, y_title=currency), width="stretch")
+    with right:
+        fig = trend_figure(daily, "profit", name="Profit", color=WHITE, currency=True)
+        st.plotly_chart(style_chart(fig, title="Profit over time", subtitle=note, y_title=currency), width="stretch")
+    fig = go.Figure(go.Bar(
+        x=[row["date"] for row in daily], y=[row["throughput_mwh"] for row in daily],
+        marker_color=MINT, name="Throughput", hovertemplate="%{x}<br>%{y:,.2f} MWh<extra></extra>",
+    ))
+    if one_point:
+        fig.update_xaxes(type="category")
+    st.plotly_chart(style_chart(fig, title="Daily energy throughput", subtitle=note, y_title="MWh"), width="stretch")
+
+
+def _dispatch_section(st, data: dict, currency: str, zone: str) -> None:
+    render_section_header(st, "Dispatch Activity")
+    dispatches = data["series"].get("dispatches", [])
+    if not dispatches:
+        st.info("No completed operational or simulation-derived dispatch records are available.")
+        return
+    fig = go.Figure(go.Scatter(
+        x=[row["timestamp"] for row in dispatches], y=[row["discharge_energy_mwh"] for row in dispatches],
+        mode="markers", marker={"color": MINT, "size": 11}, name="Dispatch",
+        customdata=[[row.get("asset_id"), row.get("profit"), row.get("data_quality")] for row in dispatches],
+        hovertemplate="%{x|%b %d, %Y %H:%M}<br>%{y:,.2f} MWh<br>Asset %{customdata[0]}<br>Profit $%{customdata[1]:,.2f}<br>%{customdata[2]}<extra></extra>",
+    ))
+    st.plotly_chart(style_chart(fig, title="Dispatch timeline", subtitle="Completed ledger events; simulated records remain explicitly classified.", y_title="Discharged MWh"), width="stretch")
+    rows = [{
+        "Time": format_timestamp(row.get("timestamp"), zone),
+        "Asset": row.get("asset_id") or "Unassigned",
+        "Charge MWh": float(row.get("charge_energy_mwh") or 0),
+        "Discharge MWh": float(row.get("discharge_energy_mwh") or 0),
+        "Revenue": format_currency(row.get("revenue"), currency),
+        "Charging Cost": format_currency(row.get("charging_cost"), currency),
+        "Profit": format_currency(row.get("profit"), currency),
+        "Market": row.get("market") or "Not recorded",
+        "Node": row.get("location") or "Not recorded",
+        "Classification": str(row.get("data_quality", "")).replace("_", " ").title(),
+    } for row in reversed(dispatches[-10:])]
+    st.dataframe(rows, width="stretch", hide_index=True)
+
+
+def _assets_section(st, payload: dict, currency: str, zone: str) -> None:
+    render_section_header(st, "Asset Intelligence")
+    assets = payload.get("assets", [])
+    if not assets:
+        st.info("No active asset intelligence is available through the portfolio API.")
+        return
+    rows = [{
+        "Asset": item.get("asset_name") or item.get("asset_id"),
+        "Technology": item.get("technology") or "Not recorded",
+        "Location": item.get("location") or "Not recorded",
+        "Status": item.get("status") or "Unknown",
+        "Power": format_power(item.get("power_mw")),
+        "Energy": format_energy(item.get("energy_mwh")),
+        "Dispatches": int(item.get("total_dispatches") or 0),
+        "Revenue": format_currency(item.get("total_revenue"), currency),
+        "Profit": format_currency(item.get("total_profit"), currency),
+        "Last Dispatch": format_timestamp(item.get("last_dispatch_time"), zone),
+    } for item in assets]
+    st.dataframe(rows, width="stretch", hide_index=True)
+
+
+def _render_live(st, client) -> None:
+    control, action = st.columns([5, 1])
+    with control:
+        timezone_name = st.text_input("Reporting timezone", placeholder="Use portfolio default", help="Optional IANA timezone such as America/Denver.")
+    with action:
+        st.write("")
+        st.button("Refresh", type="primary", width="stretch", help="Request fresh API, Supabase, and CAISO data now.")
+    _countdown(st)
+    with st.spinner("Refreshing live operations data…"):
+        payload, error = refresh_dashboard_data(st.session_state, client, timezone_name=timezone_name or None)
+    if error:
+        if payload:
+            st.warning(f"Live refresh failed — {error} Previously loaded successful data remains visible.")
+        else:
+            render_error_state(st, error)
+            return
+    data = payload["dashboard"]
     zone = data["period"]["timezone"]
     currency = data["portfolio"]["currency_code"]
+    kpis = data["kpis"]
+    metadata = data["metadata"]
+    refreshed_at = payload["refreshed_at"]
+    render_page_header(st, "Executive Operations", "Live portfolio economics, fleet capacity, dispatch activity, and CAISO market intelligence.", badge="Live data", environment="Production")
+    st.caption(f"Last successful refresh {format_timestamp(refreshed_at, zone)} · Data freshness {format_timestamp(metadata.get('data_freshness_at'), zone)} · API latency {payload['latency_ms']:.0f} ms")
 
+    render_section_header(st, "Executive Overview")
     _cards(st, [
-        ("Portfolio Value", "Not available", "neutral"),
-        ("Today's Revenue", format_currency(kpis["today_revenue"], currency), _tone(kpis["today_revenue"])),
-        ("Today's Profit", format_currency(kpis["today_profit"], currency), _tone(kpis["today_profit"])),
-        ("Available Capacity", format_power(kpis["available_capacity_mw"]), "neutral"),
-        ("Active Assets", f'{kpis["active_assets"]:,}', "neutral"),
-        ("Today's Dispatches", f'{kpis["today_dispatches"]:,}', "neutral"),
-        ("Battery State of Charge", "Not available", "neutral"),
-        ("Current Market Price", _available(kpis["current_market_price_per_mwh"], lambda value: f'{format_currency(value, currency)}/MWh'), "neutral"),
-        ("Last API Sync", format_timestamp(kpis["last_api_sync_at"], zone), "positive"),
+        {"label": "Portfolio Value", "value": "Not available", "subtitle": "Requires valuation integration", "icon": "◇", "tooltip": "No authoritative valuation source is connected."},
+        {"label": "Today's Revenue", "value": format_currency(kpis["today_revenue"], currency), "subtitle": "Completed dispatch ledger", "icon": "$", "tone": _tone(kpis["today_revenue"])},
+        {"label": "Today's Profit", "value": format_currency(kpis["today_profit"], currency), "subtitle": data["data_quality"]["financial_values"].replace("_", " ").title(), "icon": "↗", "tone": _tone(kpis["today_profit"])},
+        {"label": "Available Capacity", "value": format_power(kpis["available_capacity_mw"]), "subtitle": "Configured active assets", "icon": "⚡"},
+        {"label": "Active Assets", "value": f'{kpis["active_assets"]:,}', "subtitle": "Portfolio fleet", "icon": "▦"},
+        {"label": "Today's Dispatches", "value": f'{kpis["today_dispatches"]:,}', "subtitle": f"Reporting timezone · {zone}", "icon": "↔"},
+        {"label": "Battery State of Charge", "value": "Not available", "subtitle": "Requires telemetry integration", "icon": "▤"},
+        {"label": "Current Market Price", "value": "Not available" if kpis["current_market_price_per_mwh"] is None else f'{format_currency(kpis["current_market_price_per_mwh"], currency)}/MWh', "subtitle": f'{metadata.get("market_type", "RTM")} · {metadata.get("market_location")}', "icon": "⌁"},
+        {"label": "Last API Sync", "value": format_timestamp(kpis["last_api_sync_at"], zone), "subtitle": f"Request latency · {payload['latency_ms']:.0f} ms", "icon": "◷", "tone": "positive"},
     ])
-    quality = data["data_quality"]["financial_values"].replace("_", " ").title()
-    st.caption(
-        f"Financial ledger classification: {quality}. Available capacity is configured active-asset capacity. "
-        "Portfolio valuation and battery SOC require sources that are not currently present."
-    )
 
-    render_section_header(st, "System status")
+    render_section_header(st, "System Health")
+    checked = format_timestamp(refreshed_at, zone)
+    status = data["status"]
     render_system_status(st, [
-        ("API", status["api"].replace("_", " ").title(), status["api"] == "connected"),
-        ("Supabase", status["supabase"].replace("_", " ").title(), status["supabase"] == "connected"),
-        ("CAISO Market Data", status["market_data"].replace("_", " ").title(), status["market_data"] == "connected"),
-        ("Simulation Engine", status["simulation_engine"].replace("_", " ").title(), status["simulation_engine"] == "ready"),
+        ("API", status["api"].title(), status["api"] == "connected", f"Checked {checked} · {payload['latency_ms']:.0f} ms total request latency"),
+        ("Supabase", status["supabase"].title(), status["supabase"] == "connected", f"Ledger aggregation checked {checked}"),
+        ("CAISO Market Data", status["market_data"].replace("_", " ").title(), status["market_data"] == "connected", f"Latest interval {format_timestamp(metadata.get('market_updated_at'), zone)}"),
+        ("Simulation Engine", status["simulation_engine"].title(), status["simulation_engine"] == "ready", "Historical calculation workflow available"),
     ])
-    render_data_freshness(
-        st,
-        format_timestamp(metadata.get("data_freshness_at"), zone, fallback="No ledger updates"),
-    )
+    render_data_freshness(st, format_timestamp(metadata.get("data_freshness_at"), zone))
+    _market_section(st, data, currency, zone)
+    _performance_section(st, data, currency)
+    _dispatch_section(st, data, currency, zone)
+    _assets_section(st, payload, currency, zone)
 
-    daily = series.get("daily", [])
-    if daily:
-        left, right = st.columns(2)
-        with left:
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=[row["date"] for row in daily], y=[row["revenue"] for row in daily], name="Revenue", line={"color": MINT, "width": 3}))
-            st.plotly_chart(_layout(fig, "Revenue over time", currency), width="stretch")
-        with right:
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=[row["date"] for row in daily], y=[row["profit"] for row in daily], name="Profit", line={"color": WHITE, "width": 3}))
-            st.plotly_chart(_layout(fig, "Profit over time", currency), width="stretch")
+    render_section_header(st, "Future Capabilities")
+    render_capabilities(st, [
+        ("Battery Telemetry", "Will unlock live SOC, charge rate, temperature, alarms, and cycle tracking.", "Telemetry API"),
+        ("Portfolio Valuation", "Will unlock asset value, project returns, and portfolio NAV.", "Financial valuation source"),
+        ("Forecasting", "Will unlock price, load, and renewable generation outlooks.", "Forecast data service"),
+        ("Asset Health", "Will unlock condition monitoring, alarms, and maintenance risk.", "OEM or SCADA data"),
+        ("Fleet Optimization", "Will unlock coordinated multi-asset dispatch recommendations.", "Optimization engine"),
+    ])
 
-        left, right = st.columns(2)
-        with left:
-            fig = go.Figure(go.Bar(x=[row["date"] for row in daily], y=[row["throughput_mwh"] for row in daily], marker_color=MINT, name="Throughput"))
-            st.plotly_chart(_layout(fig, "Daily energy throughput", "MWh"), width="stretch")
-        with right:
-            dispatches = series.get("dispatches", [])
-            fig = go.Figure(go.Scatter(
-                x=[row["timestamp"] for row in dispatches],
-                y=[row["energy_mwh"] for row in dispatches],
-                mode="markers", marker={"color": MINT, "size": 10}, name="Dispatch",
-                text=[row.get("asset_id") or "Unassigned asset" for row in dispatches],
-            ))
-            st.plotly_chart(_layout(fig, "Dispatch timeline", "MWh"), width="stretch")
-    else:
-        _empty_chart(st, "Portfolio trends", "No completed dispatch records are available for revenue, profit, throughput, or dispatch charts.")
 
-    prices = series.get("market_prices", [])
-    if prices:
-        fig = go.Figure(go.Scatter(x=[row["timestamp"] for row in prices], y=[row["price_per_mwh"] for row in prices], line={"color": MINT, "width": 3}, name="CAISO RTM LMP"))
-        st.plotly_chart(_layout(fig, "CAISO market price curve", f"{currency}/MWh"), width="stretch")
-    else:
-        _empty_chart(st, "CAISO market price curve", "Live CAISO pricing is currently unavailable. No market prices are being inferred or cached as live values.")
-
-    unavailable_a, unavailable_b = st.columns(2)
-    with unavailable_a:
-        _empty_chart(st, "Battery state of charge", "No state-of-charge telemetry or history is available through the backend yet.")
-    with unavailable_b:
-        _empty_chart(st, "Asset utilization", "No authoritative asset-availability hours are stored, so utilization is not estimated.")
-
-    st.caption(
-        f"Generated {format_timestamp(metadata['generated_at'], zone)} · "
-        f"Ledger freshness {format_timestamp(metadata.get('data_freshness_at'), zone, fallback='Not available')} · "
-        f"CAISO freshness {format_timestamp(metadata.get('market_updated_at'), zone, fallback='Not available')}"
-    )
+def render(st, client) -> None:
+    # Streamlit fragments provide bounded 60-second reruns without re-running navigation.
+    st.fragment(run_every=60)(_render_live)(st, client)

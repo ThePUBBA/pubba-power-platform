@@ -18,7 +18,8 @@ def install_console_theme(st) -> None:
             --pubba-card: #171717;
             --pubba-text: #FFFFFF;
             --pubba-muted: #A7A7A7;
-            --pubba-border: #2A2A2A;
+            --pubba-elevated: #1C1C1C;
+            --pubba-border: #2F2F2F;
             --pubba-danger: #FF6B6B;
             --pubba-radius: 14px;
         }
@@ -215,7 +216,7 @@ def install_console_theme(st) -> None:
             border: 1px solid var(--pubba-border);
             border-radius: var(--pubba-radius);
             padding: 1.1rem 1.15rem;
-            min-height: 116px;
+            min-height: 150px;
             box-shadow: 0 12px 32px rgba(0, 0, 0, .2);
             transition: border-color .18s ease, transform .18s ease;
         }
@@ -241,6 +242,9 @@ def install_console_theme(st) -> None:
             margin-top: .8rem;
             overflow-wrap: anywhere;
         }
+        .pubba-kpi-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+        .pubba-kpi-icon { color: var(--pubba-muted); font-size: 1rem; }
+        .pubba-kpi-subtitle { color: var(--pubba-muted); font-size: .72rem; line-height: 1.4; margin-top: .65rem; }
         .pubba-positive { border-top: 2px solid var(--pubba-accent); }
         .pubba-negative { border-top: 2px solid var(--pubba-danger); }
         .pubba-neutral { border-top: 2px solid #404040; }
@@ -329,6 +333,18 @@ def install_console_theme(st) -> None:
             border-radius: 12px;
             padding: .85rem 1rem;
         }
+        .pubba-status-meta { color: var(--pubba-muted); font-size: .7rem; line-height: 1.45; margin-top: .4rem; }
+        .pubba-capability-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: .75rem; }
+        .pubba-capability { min-height: 175px; background: var(--pubba-card); border: 1px solid var(--pubba-border); border-radius: var(--pubba-radius); padding: 1rem; }
+        .pubba-capability-title { font-family: var(--font-display); font-size: 1.05rem; letter-spacing: .025em; }
+        .pubba-capability-status { color: var(--pubba-accent); font-size: .7rem; margin: .6rem 0; text-transform: uppercase; }
+        .pubba-capability-copy { color: var(--pubba-muted); font-size: .76rem; line-height: 1.5; }
+        .pubba-environment { color: #000; background: var(--pubba-accent); border-radius: 999px; padding: .28rem .55rem; font: .72rem var(--font-display); letter-spacing: .04em; text-transform: uppercase; }
+        .pubba-live-dot { animation: pubbaPulse 1.8s ease-in-out infinite; }
+        @keyframes pubbaPulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+        [data-testid="stExpander"] { background: var(--pubba-card); border-color: var(--pubba-border); border-radius: 12px; }
+        ::-webkit-scrollbar { width: 10px; height: 10px; }
+        ::-webkit-scrollbar-thumb { background: #353535; border-radius: 999px; }
         .pubba-status-name {
             color: var(--pubba-muted);
             font-family: var(--font-display);
@@ -356,6 +372,7 @@ def install_console_theme(st) -> None:
             .pubba-page-header { align-items: flex-start; flex-direction: column; }
             .pubba-kpi { min-height: 104px; }
             .pubba-status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .pubba-capability-grid { grid-template-columns: 1fr; }
         }
         </style>
         """,
@@ -387,15 +404,17 @@ def render_connection_status(st, label: str, *, connected: bool) -> None:
 
 
 def render_page_header(
-    st, title: str, description: str, *, badge: str | None = None
+    st, title: str, description: str, *, badge: str | None = None,
+    environment: str | None = None,
 ) -> None:
     badge_html = f'<span class="pubba-badge">{escape(badge)}</span>' if badge else ""
+    environment_html = f'<span class="pubba-environment">{escape(environment)}</span>' if environment else ""
     st.markdown(
         '<div class="pubba-page-header"><div>'
         '<div class="pubba-eyebrow">PUBBA Power</div>'
         f'<h1 class="pubba-title">{escape(title)}</h1>'
         f'<div class="pubba-description">{escape(description)}</div>'
-        f'</div>{badge_html}</div>',
+        f'</div><div style="display:flex;gap:.55rem;align-items:center">{badge_html}{environment_html}</div></div>',
         unsafe_allow_html=True,
     )
 
@@ -408,12 +427,17 @@ def render_section_header(st, title: str) -> None:
     )
 
 
-def render_kpi_card(st, label: str, value: str, *, tone: str = "neutral") -> None:
+def render_kpi_card(
+    st, label: str, value: str, *, tone: str = "neutral",
+    subtitle: str = "", icon: str = "", tooltip: str = "",
+) -> None:
     safe_tone = tone if tone in {"positive", "negative", "neutral"} else "neutral"
     st.markdown(
         f'<div class="pubba-kpi pubba-{safe_tone}">'
-        f'<div class="pubba-kpi-label">{escape(label)}</div>'
-        f'<div class="pubba-kpi-value">{escape(value)}</div></div>',
+        f'<div class="pubba-kpi-head"><div class="pubba-kpi-label" title="{escape(tooltip)}">{escape(label)}</div>'
+        f'<div class="pubba-kpi-icon">{escape(icon)}</div></div>'
+        f'<div class="pubba-kpi-value">{escape(value)}</div>'
+        f'<div class="pubba-kpi-subtitle">{escape(subtitle)}</div></div>',
         unsafe_allow_html=True,
     )
 
@@ -437,12 +461,24 @@ def render_data_freshness(st, value: str) -> None:
     )
 
 
-def render_system_status(st, statuses: list[tuple[str, str, bool]]) -> None:
+def render_system_status(st, statuses: list[tuple]) -> None:
     items = "".join(
         '<div class="pubba-status-item">'
         f'<div class="pubba-status-name">{escape(name)}</div>'
-        f'<div class="pubba-status-value{" is-good" if healthy else ""}">'
-        f'{escape(value)}</div></div>'
-        for name, value, healthy in statuses
+        f'<div class="pubba-status-value{" is-good" if healthy else ""}">{escape(value)}</div>'
+        f'<div class="pubba-status-meta">{escape(meta if len(item) > 3 else "")}</div></div>'
+        for item in statuses
+        for name, value, healthy, meta in [(*item, "")[:4]]
     )
     st.markdown(f'<div class="pubba-status-grid">{items}</div>', unsafe_allow_html=True)
+
+
+def render_capabilities(st, capabilities: list[tuple[str, str, str]]) -> None:
+    cards = "".join(
+        '<div class="pubba-capability">'
+        f'<div class="pubba-capability-title">{escape(name)}</div>'
+        f'<div class="pubba-capability-status">Planned · {escape(integration)}</div>'
+        f'<div class="pubba-capability-copy">{escape(description)}</div></div>'
+        for name, description, integration in capabilities
+    )
+    st.markdown(f'<div class="pubba-capability-grid">{cards}</div>', unsafe_allow_html=True)

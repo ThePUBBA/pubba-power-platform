@@ -1,0 +1,49 @@
+from dashboard.api_client import DashboardApiError
+from dashboard.charts import trend_figure
+from dashboard.refresh import STATE_KEY, refresh_dashboard_data
+
+
+class Client:
+    last_latency_ms = 12.5
+
+    def get_dashboard_summary(self, **kwargs):
+        return {"kpis": {}, "series": {}}
+
+    def get_portfolio_assets(self):
+        self.last_latency_ms = 7.5
+        return [{"asset_id": "BAT-001"}]
+
+
+class FailedClient(Client):
+    def get_dashboard_summary(self, **kwargs):
+        raise DashboardApiError("temporary failure")
+
+
+def test_refresh_stores_success_and_latency():
+    state = {}
+    payload, error = refresh_dashboard_data(state, Client())
+
+    assert error is None
+    assert payload["assets"][0]["asset_id"] == "BAT-001"
+    assert payload["latency_ms"] == 20
+    assert state[STATE_KEY]["data"] is payload
+
+
+def test_refresh_failure_preserves_previous_success():
+    previous = {"dashboard": {"kpis": {"today_profit": 10}}}
+    state = {STATE_KEY: {"data": previous}}
+
+    payload, error = refresh_dashboard_data(state, FailedClient())
+
+    assert payload is previous
+    assert error == "temporary failure"
+
+
+def test_single_point_trend_uses_categorical_axis():
+    figure = trend_figure(
+        [{"date": "2026-07-17", "revenue": 100}],
+        "revenue", name="Revenue", color="#44FFBB", currency=True,
+    )
+
+    assert figure.layout.xaxis.type == "category"
+    assert figure.data[0].mode == "markers"

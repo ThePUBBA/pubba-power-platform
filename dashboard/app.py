@@ -10,6 +10,7 @@ from dashboard.components import (
     render_sidebar_brand,
 )
 from dashboard.pages import overview, simulations
+from dashboard.refresh import STATE_KEY
 
 
 def main() -> None:
@@ -21,6 +22,7 @@ def main() -> None:
     )
     install_console_theme(st)
     render_sidebar_brand(st)
+    st.sidebar.markdown('<span class="pubba-environment">Production</span>', unsafe_allow_html=True)
     page = st.sidebar.radio(
         "Navigation", ["Overview", "Simulations"], index=0, label_visibility="collapsed"
     )
@@ -32,13 +34,26 @@ def main() -> None:
         render_connection_status(st, "API configuration required", connected=False)
         render_error_state(st, str(exc))
         return
-    render_connection_status(st, "PUBBA Power API configured", connected=True)
+    cached = st.session_state.get(STATE_KEY, {}).get("data", {})
+    live_status = cached.get("dashboard", {}).get("status", {})
+    render_connection_status(
+        st, "API connected" if live_status.get("api") == "connected" else "API configured",
+        connected=live_status.get("api", "connected") == "connected",
+    )
+    render_connection_status(
+        st,
+        "CAISO connected" if live_status.get("market_data") == "connected" else "CAISO awaiting check",
+        connected=live_status.get("market_data") == "connected",
+    )
     if page == "Overview":
         overview.render(st, client)
     else:
         simulations.render(st, client)
     st.sidebar.divider()
-    st.sidebar.caption("© 2026 PUBBA Power  ·  v1.0")
+    refreshed = cached.get("refreshed_at")
+    if refreshed:
+        st.sidebar.caption(f"Last refresh · {refreshed[:19].replace('T', ' ')} UTC")
+    st.sidebar.caption("© 2026 PUBBA Power  ·  v1.0.0")
 
 
 if __name__ == "__main__":

@@ -93,8 +93,13 @@ def _dispatch_series(records: list[dict]) -> list[dict]:
             "discharge_start": _timestamp(record.get("discharge_start")),
             "discharge_end": _timestamp(record.get("discharge_end")),
             "energy_mwh": _decimal(record.get("sold_energy_mwh") or record.get("energy_mwh")),
+            "charge_energy_mwh": _decimal(record.get("purchased_energy_mwh")),
+            "discharge_energy_mwh": _decimal(record.get("sold_energy_mwh")),
             "revenue": _decimal(record.get("discharge_revenue")),
+            "charging_cost": _decimal(record.get("charging_cost")),
             "profit": _decimal(record.get("net_profit")),
+            "market": record.get("market"),
+            "location": record.get("location"),
             "data_quality": (
                 "calculated_estimate"
                 if str(record.get("status", "")).lower() == "simulated"
@@ -117,6 +122,7 @@ def _market_snapshot(
             for row in records
             if row.get("timestamp") and row.get("lmp_prc") is not None
         ]
+        points.sort(key=lambda point: str(point["timestamp"]))
         if not points:
             raise CaisoOasisError("CAISO OASIS returned no usable price points")
         return {
@@ -174,6 +180,10 @@ def build_dashboard_summary(
     }
     today_revenue = sum((_decimal(row.get("discharge_revenue")) for row in today), ZERO)
     today_profit = sum((_decimal(row.get("net_profit")) for row in today), ZERO)
+    prices = [
+        _decimal(point.get("price_per_mwh")) for point in market["price_points"]
+        if point.get("price_per_mwh") is not None
+    ]
     return {
         "portfolio": summary["portfolio"],
         "period": summary["period"],
@@ -213,5 +223,15 @@ def build_dashboard_summary(
             **summary["metadata"],
             "market_updated_at": market["updated_at"],
             "market_location": location,
+            "market_name": portfolio.get("default_market"),
+            "market_type": market["market"],
+            "market_statistics": {
+                "minimum_price_per_mwh": min(prices) if prices else None,
+                "maximum_price_per_mwh": max(prices) if prices else None,
+                "average_price_per_mwh": (
+                    sum(prices, ZERO) / len(prices) if prices else None
+                ),
+                "price_spread_per_mwh": max(prices) - min(prices) if prices else None,
+            },
         },
     }

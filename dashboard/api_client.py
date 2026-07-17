@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from time import perf_counter
 from datetime import datetime
 from typing import Any
 
@@ -58,6 +59,7 @@ class Only1ApiClient:
         self.base_url = configured_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
         self.session = session
+        self.last_latency_ms: float | None = None
 
     def get_portfolio_summary(
         self,
@@ -117,7 +119,17 @@ class Only1ApiClient:
             )
         return payload
 
+    def get_portfolio_assets(self) -> list[dict]:
+        payload = self._request("get", "/portfolio/assets")
+        if not isinstance(payload, list) or any(not isinstance(item, dict) for item in payload):
+            raise DashboardApiError(
+                "The backend returned invalid asset intelligence data.",
+                code="invalid_response",
+            )
+        return payload
+
     def _request(self, method: str, path: str, **kwargs: Any) -> Any:
+        started = perf_counter()
         try:
             response = self.session.request(
                 method,
@@ -126,14 +138,17 @@ class Only1ApiClient:
                 **kwargs,
             )
         except requests.Timeout as exc:
+            self.last_latency_ms = (perf_counter() - started) * 1000
             raise DashboardApiError(
                 "The backend request timed out. Try refreshing.", code="timeout"
             ) from exc
         except requests.RequestException as exc:
+            self.last_latency_ms = (perf_counter() - started) * 1000
             raise DashboardApiError(
                 "The backend is unavailable. Check the service and retry.",
                 code="connection_error",
             ) from exc
+        self.last_latency_ms = (perf_counter() - started) * 1000
         if not 200 <= response.status_code < 300:
             code, message = _safe_error(response)
             raise DashboardApiError(message, code=code)

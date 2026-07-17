@@ -107,6 +107,15 @@ def test_dashboard_client_uses_live_summary_endpoint_and_validates_contract():
     assert caught.value.code == "invalid_response"
 
 
+def test_asset_client_uses_existing_fastapi_route():
+    session = Session(Response([{"asset_id": "BAT-001"}]))
+    client = Only1ApiClient("https://api.example.test", session=session)
+
+    assert client.get_portfolio_assets() == [{"asset_id": "BAT-001"}]
+    assert session.calls[0][1] == "https://api.example.test/portfolio/assets"
+    assert client.last_latency_ms is not None
+
+
 @pytest.mark.parametrize(
     ("error", "code"),
     [(requests.Timeout(), "timeout"), (requests.ConnectionError(), "connection_error")],
