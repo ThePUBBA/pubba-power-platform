@@ -1,5 +1,5 @@
 from dashboard.api_client import DashboardApiError
-from dashboard.charts import trend_figure
+from dashboard.charts import style_chart, trend_figure
 from dashboard.pages.overview import _market_day_axis
 from dashboard.refresh import STATE_KEY, refresh_dashboard_data
 
@@ -51,6 +51,21 @@ def test_single_point_trend_uses_categorical_axis():
     assert figure.layout.yaxis.tickformat == ",.2f"
     assert figure.data[0].mode == "markers"
     assert list(figure.data[0].x) == ["2026-07-17"]
+
+
+def test_shared_chart_style_uses_single_point_tooltips():
+    figure = style_chart(
+        trend_figure(
+            [{"date": "Jul 17, 2026", "revenue": 100}],
+            "revenue",
+            name="Revenue",
+            color="#44FFBB",
+            currency=True,
+        ),
+        title="Revenue",
+    )
+
+    assert figure.layout.hovermode == "closest"
 
 
 def test_market_axis_extends_two_hours_beyond_latest_interval():

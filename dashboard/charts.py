@@ -28,7 +28,7 @@ def style_chart(
         plot_bgcolor="rgba(0,0,0,0)",
         font={"color": WHITE, "family": "Inter, Arial, sans-serif", "size": 12},
         margin={"l": 55, "r": 24, "t": 78, "b": 45},
-        hovermode="x unified",
+        hovermode="closest",
         hoverlabel={"bgcolor": "#1C1C1C", "bordercolor": GRID, "font_color": WHITE},
         legend={"orientation": "h", "y": 1.12, "x": 1, "xanchor": "right"},
     )
