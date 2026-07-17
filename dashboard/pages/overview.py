@@ -180,8 +180,8 @@ def _dispatch_section(st, data: dict, currency: str, zone: str) -> None:
     fig = go.Figure(go.Scatter(
         x=display_times, y=[row["discharge_energy_mwh"] for row in dispatches],
         mode="markers", marker={"color": MINT, "size": 11}, name="Dispatch",
-        customdata=[[display_time, row.get("asset_id"), row.get("profit"), row.get("data_quality")] for display_time, row in zip(display_times, dispatches)],
-        hovertemplate="%{customdata[0]}<br>%{y:,.2f} MWh<br>Asset %{customdata[1]}<br>Profit $%{customdata[2]:,.2f}<br>%{customdata[3]}<extra></extra>",
+        customdata=[[display_time, row.get("asset_id"), row.get("profit")] for display_time, row in zip(display_times, dispatches)],
+        hovertemplate="%{customdata[0]}<br>%{y:,.2f} MWh<br>Asset %{customdata[1]}<br>Profit $%{customdata[2]:,.2f}<extra></extra>",
     ))
     fig.update_xaxes(type="category")
     st.plotly_chart(style_chart(fig, title="Dispatch timeline", subtitle="Completed ledger events; simulated records remain explicitly classified.", y_title="Discharged MWh"), width="stretch")
