@@ -107,6 +107,13 @@ def _market_section(st, data: dict, currency: str, zone: str) -> None:
         automargin=True,
         range=day_range,
     )
+    upper_price = max(values)
+    upper_padding = max(2.0, (upper_price - 10.0) * 0.08)
+    fig.update_yaxes(
+        range=[10, upper_price + upper_padding],
+        tickprefix="$",
+        tickformat=",.2f",
+    )
     fig.add_hline(y=current, line_dash="dot", line_color=GRAY)
     fig.add_annotation(
         x=latest_timestamp,
