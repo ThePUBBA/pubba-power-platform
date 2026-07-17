@@ -256,7 +256,7 @@ def _render_live(st, client) -> None:
         {"label": "Today's Dispatches", "value": f'{kpis["today_dispatches"]:,}', "subtitle": f"Reporting timezone · {zone}", "icon": "↔"},
         {"label": "Battery State of Charge", "value": "Not available", "subtitle": "Requires telemetry integration", "icon": "▤"},
         {"label": "Current Market Price", "value": "Not available" if kpis["current_market_price_per_mwh"] is None else f'{format_currency(kpis["current_market_price_per_mwh"], currency)}/MWh', "subtitle": f'{metadata.get("market_type", "RTM")} · {metadata.get("market_location")}', "icon": "⌁"},
-        {"label": "Last API Sync", "value": format_timestamp(kpis["last_api_sync_at"], zone), "subtitle": f"Request latency · {payload['latency_ms']:.0f} ms", "icon": "◷", "tone": "neutral"},
+        {"label": "Last API Sync", "value": format_timestamp(kpis["last_api_sync_at"], zone), "subtitle": f"Request latency · {payload['latency_ms']:.0f} ms", "icon": "◷", "tone": "positive"},
     ])
 
     render_section_header(st, "System Health")
