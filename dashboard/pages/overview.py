@@ -82,6 +82,8 @@ def _market_section(st, data: dict, currency: str, zone: str) -> None:
         tickmode="array",
         tickvals=tick_values,
         ticktext=[format_chart_time_tick(value, zone) for value in tick_values],
+        tickangle=0,
+        automargin=True,
     )
     fig.add_hline(y=current, line_dash="dot", line_color=GRAY)
     fig = style_chart(
