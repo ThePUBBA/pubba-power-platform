@@ -66,13 +66,17 @@ def _market_section(st, data: dict, currency: str, zone: str) -> None:
     values = [point["price_per_mwh"] for point in prices]
     market_times = [format_timestamp(point["timestamp"], zone) for point in prices]
     fig = go.Figure(go.Scatter(
-        x=market_times, y=values,
+        x=[point["timestamp"] for point in prices], y=values,
         customdata=market_times,
         line={"color": MINT, "width": 3}, name="CAISO RTM LMP",
         hovertemplate="%{customdata}<br>$%{y:,.2f}/MWh<extra></extra>",
     ))
     current = values[-1]
-    fig.update_xaxes(type="category")
+    fig.update_xaxes(
+        type="date",
+        tickformat="%I:%M %p<br>%b %d, %Y",
+        nticks=9,
+    )
     fig.add_hline(y=current, line_dash="dot", line_color=GRAY)
     fig = style_chart(
         fig, title="CAISO market price curve",
