@@ -303,6 +303,62 @@ def install_console_theme(st) -> None:
             margin-top: .35rem;
             overflow-wrap: anywhere;
         }
+        .pubba-asset-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(270px, 1fr));
+            gap: .85rem;
+            margin-top: .75rem;
+        }
+        .pubba-asset-card {
+            background: var(--pubba-card);
+            border: 1px solid var(--pubba-border);
+            border-radius: var(--pubba-radius);
+            padding: 1.1rem;
+        }
+        .pubba-asset-head {
+            display: flex;
+            justify-content: space-between;
+            gap: .75rem;
+            align-items: flex-start;
+            padding-bottom: .75rem;
+            border-bottom: 1px solid var(--pubba-border);
+        }
+        .pubba-asset-name {
+            color: var(--pubba-text);
+            font-family: var(--font-display);
+            font-size: 1.25rem;
+        }
+        .pubba-asset-status {
+            color: var(--pubba-accent);
+            font-family: var(--font-display);
+            font-size: .72rem;
+            letter-spacing: .05em;
+            text-transform: uppercase;
+        }
+        .pubba-asset-meta {
+            color: var(--pubba-muted);
+            font-size: .76rem;
+            margin-top: .3rem;
+        }
+        .pubba-asset-metrics {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: .75rem;
+            margin-top: .9rem;
+        }
+        .pubba-asset-metric span { display: block; }
+        .pubba-asset-metric-label {
+            color: var(--pubba-muted);
+            font-family: var(--font-display);
+            font-size: .65rem;
+            letter-spacing: .05em;
+            text-transform: uppercase;
+        }
+        .pubba-asset-metric-value {
+            color: var(--pubba-text);
+            font-size: .86rem;
+            margin-top: .2rem;
+        }
 
         [data-testid="stForm"] {
             background: var(--pubba-surface);
@@ -508,6 +564,26 @@ def render_summary_grid(st, items: list[tuple[str, str]]) -> None:
     )
 
 
+def render_asset_cards(st, assets: list[dict]) -> None:
+    cards = "".join(
+        '<div class="pubba-asset-card">'
+        '<div class="pubba-asset-head"><div>'
+        f'<div class="pubba-asset-name">{escape(asset["name"])}</div>'
+        f'<div class="pubba-asset-meta">{escape(asset["technology"])} · {escape(asset["location"])}</div>'
+        f'</div><div class="pubba-asset-status">{escape(asset["status"])}</div></div>'
+        '<div class="pubba-asset-metrics">'
+        + "".join(
+            '<div class="pubba-asset-metric">'
+            f'<span class="pubba-asset-metric-label">{escape(label)}</span>'
+            f'<span class="pubba-asset-metric-value">{escape(value)}</span></div>'
+            for label, value in asset["metrics"]
+        )
+        + '</div></div>'
+        for asset in assets
+    )
+    st.markdown(f'<div class="pubba-asset-grid">{cards}</div>', unsafe_allow_html=True)
+
+
 def render_error_state(st, message: str) -> None:
     st.error(f"Portfolio data unavailable — {message}")
     st.caption("Use Refresh after the backend issue is resolved.")
@@ -586,11 +662,16 @@ def render_system_status(st, statuses: list[tuple]) -> None:
     st.markdown(f'<div class="pubba-status-grid">{items}</div>', unsafe_allow_html=True)
 
 
-def render_capabilities(st, capabilities: list[tuple[str, str, str]]) -> None:
+def render_capabilities(
+    st,
+    capabilities: list[tuple[str, str, str]],
+    *,
+    status: str = "Planned",
+) -> None:
     cards = "".join(
         '<div class="pubba-capability">'
         f'<div class="pubba-capability-title">{escape(name)}</div>'
-        f'<div class="pubba-capability-status">Planned · {escape(integration)}</div>'
+        f'<div class="pubba-capability-status">{escape(status)} · {escape(integration)}</div>'
         f'<div class="pubba-capability-copy">{escape(description)}</div></div>'
         for name, description, integration in capabilities
     )

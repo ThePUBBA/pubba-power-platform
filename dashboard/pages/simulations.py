@@ -5,12 +5,12 @@ import plotly.graph_objects as go
 from dashboard.api_client import DashboardApiError, Only1ApiClient
 from dashboard.charts import CHART_CONFIG, GRAY, MINT, style_chart
 from dashboard.components import (
-    render_kpi_card,
     render_notice,
     render_page_header,
     render_section_header,
+    render_summary_grid,
 )
-from dashboard.formatting import as_decimal, format_currency, format_energy, format_timestamp
+from dashboard.formatting import as_decimal, format_currency, format_energy, format_power, format_timestamp
 
 
 def render(st, client: Only1ApiClient) -> None:
@@ -21,8 +21,7 @@ def render(st, client: Only1ApiClient) -> None:
     )
     render_notice(
         st,
-        "Simulation outputs are calculated estimates based on historical market "
-        "data—not executed operational dispatches.",
+        "Simulation outputs are calculated estimates and are not live dispatch instructions.",
     )
     render_section_header(st, "Simulation Parameters")
     with st.form("simulation"):
@@ -66,33 +65,45 @@ def render(st, client: Only1ApiClient) -> None:
         st.caption("No calculated result was persisted from this failed request.")
         return
 
-    render_section_header(st, "Calculated Results")
-    cards = st.columns(4)
-    values = [
-        ("Estimated Net Profit", result.get("estimated_net_margin"), "Calculated after modeled costs", "positive" if as_decimal(result.get("estimated_net_margin")) > 0 else "negative"),
-        ("Estimated Revenue", result.get("discharge_revenue"), "Calculated discharge revenue", "neutral"),
-        ("Estimated Charging Cost", result.get("charging_cost"), "Historical-price input", "neutral"),
-        ("Discharged Energy", None, "Calculated energy output", "neutral"),
-    ]
-    for column, (label, value, subtitle, tone) in zip(cards, values):
-        with column:
-            display = format_energy(result.get("discharged_energy_mwh")) if label == "Discharged Energy" else format_currency(value)
-            render_kpi_card(st, label, display, subtitle=subtitle, tone=tone)
-
     charge = result.get("charging_window") or {}
     discharge = result.get("discharging_window") or {}
     charge_points = charge.get("prices") or []
     discharge_points = discharge.get("prices") or []
+    revenue = float(as_decimal(result.get("discharge_revenue")))
+    charging_cost = float(as_decimal(result.get("charging_cost")))
+    profit = float(as_decimal(result.get("estimated_net_margin")))
+    charge_mwh = float(as_decimal(result.get("charging_energy_required_mwh")))
+    discharge_mwh = float(as_decimal(result.get("discharged_energy_mwh")))
+    profit_margin = profit / revenue if revenue else None
+    energy_ratio = discharge_mwh / charge_mwh if charge_mwh else None
+    render_section_header(st, "Scenario Results")
+    render_summary_grid(st, [
+        ("Asset", asset_id.strip() or "Unassigned scenario"),
+        ("Power", format_power(result.get("power_mw"))),
+        ("Charge energy", format_energy(charge_mwh)),
+        ("Discharge energy", format_energy(discharge_mwh)),
+        ("Energy ratio", "Not available" if energy_ratio is None else f"{energy_ratio:.1%}"),
+        ("Classification", "Calculated estimate"),
+    ])
+    render_section_header(st, "Financial Breakdown")
+    render_summary_grid(st, [
+        ("Estimated revenue", format_currency(revenue)),
+        ("Estimated charging cost", format_currency(charging_cost)),
+        ("Estimated net profit", format_currency(profit)),
+        ("Profit margin", "Not available" if profit_margin is None else f"{profit_margin:.1%}"),
+        ("Average charge price", "Not available" if charge.get("average_price") is None else f'{format_currency(charge.get("average_price"))}/MWh'),
+        ("Average discharge price", "Not available" if discharge.get("average_price") is None else f'{format_currency(discharge.get("average_price"))}/MWh'),
+    ])
     if charge_points or discharge_points:
         render_section_header(st, "Historical Market Windows")
         fig = go.Figure()
         if charge_points:
             charge_times = [format_timestamp(p["timestamp"], "America/Los_Angeles") for p in charge_points]
-            fig.add_trace(go.Scatter(x=charge_times, y=[p["price"] for p in charge_points], customdata=charge_times, name="Charge window", line={"color": GRAY, "width": 3}, hovertemplate="%{customdata}<br>$%{y:,.2f}/MWh<extra></extra>"))
+            fig.add_trace(go.Scatter(x=[p["timestamp"] for p in charge_points], y=[p["price"] for p in charge_points], customdata=charge_times, name="Charge window", line={"color": GRAY, "width": 3}, hovertemplate="%{customdata}<br>$%{y:,.2f}/MWh<extra></extra>"))
         if discharge_points:
             discharge_times = [format_timestamp(p["timestamp"], "America/Los_Angeles") for p in discharge_points]
-            fig.add_trace(go.Scatter(x=discharge_times, y=[p["price"] for p in discharge_points], customdata=discharge_times, name="Discharge window", line={"color": MINT, "width": 3}, hovertemplate="%{customdata}<br>$%{y:,.2f}/MWh<extra></extra>"))
-        fig.update_xaxes(type="category")
+            fig.add_trace(go.Scatter(x=[p["timestamp"] for p in discharge_points], y=[p["price"] for p in discharge_points], customdata=discharge_times, name="Discharge window", line={"color": MINT, "width": 3}, hovertemplate="%{customdata}<br>$%{y:,.2f}/MWh<extra></extra>"))
+        fig.update_xaxes(type="date", tickformat="%I:%M %p", nticks=8)
         st.plotly_chart(
             style_chart(
                 fig,

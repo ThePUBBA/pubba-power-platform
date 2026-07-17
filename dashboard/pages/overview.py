@@ -21,6 +21,7 @@ from dashboard.charts import (
 )
 from dashboard.components import (
     render_capabilities,
+    render_asset_cards,
     render_data_freshness,
     render_error_state,
     render_kpi_card,
@@ -58,12 +59,25 @@ def _numeric(value: object) -> float | None:
         return None
 
 
+def _parsed_timestamp(value: object) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+
+
 def _margin(profit: float, revenue: float) -> float | None:
     return profit / revenue if revenue else None
 
 
 def _percent_label(value: float | None) -> str:
     return "Not available" if value is None else f"{value:.1%}"
+
+
+def _asset_presentation_mode(count: int) -> str:
+    return "cards" if count <= 3 else "table"
 
 
 def _daily_dispatch_metrics(dispatches: list[dict], zone: str) -> list[dict]:
@@ -78,11 +92,10 @@ def _daily_dispatch_metrics(dispatches: list[dict], zone: str) -> list[dict]:
         values = {field: _numeric(dispatch.get(field)) for field in required}
         if not timestamp or any(value is None for value in values.values()):
             continue
-        try:
-            parsed = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
-            date_key = parsed.astimezone(ZoneInfo(zone)).date().isoformat()
-        except (TypeError, ValueError):
+        parsed = _parsed_timestamp(timestamp)
+        if parsed is None:
             continue
+        date_key = parsed.astimezone(ZoneInfo(zone)).date().isoformat()
         row = grouped.setdefault(date_key, {
             "date": date_key,
             "label": format_date(date_key),
@@ -116,7 +129,7 @@ def _dispatch_chart_rows(dispatches: list[dict], zone: str) -> list[dict]:
     complete = []
     for dispatch in sorted(dispatches, key=lambda row: str(row.get("timestamp") or "")):
         values = {field: _numeric(dispatch.get(field)) for field in required}
-        if not dispatch.get("timestamp") or any(value is None for value in values.values()):
+        if _parsed_timestamp(dispatch.get("timestamp")) is None or any(value is None for value in values.values()):
             continue
         classification_key = str(dispatch.get("data_quality") or "not_recorded")
         complete.append({
@@ -169,11 +182,18 @@ def _cards(st, cards: list[dict]) -> None:
 
 def _market_section(st, data: dict, currency: str, zone: str) -> None:
     render_section_header(st, "Market Intelligence")
-    prices = data["series"].get("market_prices", [])
-    metadata = data["metadata"]
+    raw_prices = (data.get("series") or {}).get("market_prices", [])
+    prices = [
+        {"timestamp": point.get("timestamp"), "price_per_mwh": _numeric(point.get("price_per_mwh"))}
+        for point in raw_prices
+        if isinstance(point, dict)
+        and _parsed_timestamp(point.get("timestamp")) is not None
+        and _numeric(point.get("price_per_mwh")) is not None
+    ]
+    metadata = data.get("metadata") or {}
     stats = metadata.get("market_statistics", {})
     snapshot = [
-        ("Current", data["kpis"].get("current_market_price_per_mwh")),
+        ("Current", (data.get("kpis") or {}).get("current_market_price_per_mwh")),
         ("Minimum", stats.get("minimum_price_per_mwh")),
         ("Maximum", stats.get("maximum_price_per_mwh")),
         ("Average", stats.get("average_price_per_mwh")),
@@ -253,7 +273,7 @@ def _market_section(st, data: dict, currency: str, zone: str) -> None:
 
 def _performance_section(st, data: dict, currency: str, zone: str) -> None:
     render_section_header(st, "Portfolio Performance")
-    dispatches = data["series"].get("dispatches", [])
+    dispatches = (data.get("series") or {}).get("dispatches", [])
     daily = _daily_dispatch_metrics(dispatches, zone)
     if not daily:
         st.info("Complete dispatch economics are required before portfolio performance can be displayed.")
@@ -309,8 +329,8 @@ def _performance_section(st, data: dict, currency: str, zone: str) -> None:
 
 
 def _dispatch_section(st, data: dict, currency: str, zone: str) -> None:
-    render_section_header(st, "Dispatch Activity")
-    dispatches = data["series"].get("dispatches", [])
+    render_section_header(st, "Dispatch Economics")
+    dispatches = (data.get("series") or {}).get("dispatches", [])
     if not dispatches:
         st.info("No completed operational or simulation-derived dispatch records are available.")
         return
@@ -373,16 +393,54 @@ def _assets_section(st, payload: dict, currency: str, zone: str) -> None:
     if not assets:
         st.info("No active asset intelligence is available through the portfolio API.")
         return
+    active = [item for item in assets if str(item.get("status", "")).lower() == "active"]
+    total_power = sum(_numeric(item.get("power_mw")) or 0 for item in assets)
+    total_energy = sum(_numeric(item.get("energy_mwh")) or 0 for item in assets)
+    total_revenue = sum(_numeric(item.get("total_revenue")) or 0 for item in assets)
+    total_profit = sum(_numeric(item.get("total_profit")) or 0 for item in assets)
+    render_summary_grid(st, [
+        ("Portfolio assets", f"{len(assets):,}"),
+        ("Active assets", f"{len(active):,}"),
+        ("Total power", format_power(total_power)),
+        ("Total energy", format_energy(total_energy)),
+        ("Asset revenue", format_currency(total_revenue, currency)),
+        ("Asset profit", format_currency(total_profit, currency)),
+    ])
+    if _asset_presentation_mode(len(assets)) == "cards":
+        cards = []
+        for item in assets:
+            dispatch_count = int(item.get("total_dispatches") or 0)
+            average_profit = _numeric(item.get("average_profit_per_dispatch"))
+            if average_profit is None and dispatch_count:
+                average_profit = (_numeric(item.get("total_profit")) or 0) / dispatch_count
+            cards.append({
+                "name": str(item.get("asset_name") or item.get("asset_id") or "Unnamed asset"),
+                "technology": str(item.get("technology") or "Technology not recorded"),
+                "location": str(item.get("location") or "Location not recorded"),
+                "status": str(item.get("status") or "Unknown"),
+                "metrics": [
+                    ("Power", format_power(item.get("power_mw"))),
+                    ("Energy", format_energy(item.get("energy_mwh"))),
+                    ("Dispatches", f"{dispatch_count:,}"),
+                    ("Revenue", format_currency(item.get("total_revenue"), currency)),
+                    ("Profit", format_currency(item.get("total_profit"), currency)),
+                    ("Average profit", "Not available" if average_profit is None else format_currency(average_profit, currency)),
+                    ("Last dispatch", format_timestamp(item.get("last_dispatch_time"), zone)),
+                ],
+            })
+        render_asset_cards(st, cards)
+        return
     rows = [{
-        "Asset": item.get("asset_name") or item.get("asset_id"),
+        "Asset": item.get("asset_name") or item.get("asset_id") or "Unnamed asset",
         "Technology": item.get("technology") or "Not recorded",
         "Location": item.get("location") or "Not recorded",
         "Status": item.get("status") or "Unknown",
-        "Power": format_power(item.get("power_mw")),
-        "Energy": format_energy(item.get("energy_mwh")),
+        "Power MW": _numeric(item.get("power_mw")),
+        "Energy MWh": _numeric(item.get("energy_mwh")),
         "Dispatches": int(item.get("total_dispatches") or 0),
-        "Revenue": format_currency(item.get("total_revenue"), currency),
-        "Profit": format_currency(item.get("total_profit"), currency),
+        "Revenue": _numeric(item.get("total_revenue")),
+        "Profit": _numeric(item.get("total_profit")),
+        "Average Profit": _numeric(item.get("average_profit_per_dispatch")),
         "Last Dispatch": format_timestamp(item.get("last_dispatch_time"), zone),
     } for item in assets]
     st.dataframe(rows, width="stretch", hide_index=True)
@@ -404,51 +462,100 @@ def _render_live(st, client) -> None:
         else:
             render_error_state(st, error)
             return
-    data = payload["dashboard"]
-    zone = data["period"]["timezone"]
-    currency = data["portfolio"]["currency_code"]
-    kpis = data["kpis"]
-    metadata = data["metadata"]
-    refreshed_at = payload["refreshed_at"]
-    render_page_header(st, "Executive Operations", "Live portfolio economics, fleet capacity, dispatch activity, and CAISO market intelligence.", badge="Live data", environment="Production")
-    st.caption(f"Last successful refresh {format_timestamp(refreshed_at, zone)} · Data freshness {format_timestamp(metadata.get('data_freshness_at'), zone)} · API latency {payload['latency_ms']:.0f} ms")
+    data = payload.get("dashboard") or {}
+    period = data.get("period") or {}
+    portfolio = data.get("portfolio") or {}
+    zone = period.get("timezone") or portfolio.get("reporting_timezone") or "UTC"
+    currency = portfolio.get("currency_code") or "USD"
+    kpis = data.get("kpis") or {}
+    metadata = data.get("metadata") or {}
+    series = data.get("series") or {}
+    dispatches = series.get("dispatches") or []
+    economic_rows = _dispatch_chart_rows(dispatches, zone)
+    assets = payload.get("assets") or []
+    refreshed_at = payload.get("refreshed_at")
+    total_revenue = sum(row["revenue"] for row in economic_rows)
+    total_cost = sum(row["charging_cost"] for row in economic_rows)
+    total_profit = sum(row["profit"] for row in economic_rows)
+    profit_margin = _margin(total_profit, total_revenue)
+    total_discharge = sum(row["discharge_energy_mwh"] for row in economic_rows)
+    active_assets = [item for item in assets if str(item.get("status", "")).lower() == "active"]
+    total_power = sum(_numeric(item.get("power_mw")) or 0 for item in active_assets)
+    total_energy = sum(_numeric(item.get("energy_mwh")) or 0 for item in active_assets)
+    current_price = kpis.get("current_market_price_per_mwh")
+    financial_classification = str(
+        (data.get("data_quality") or {}).get("financial_values") or "not recorded"
+    ).replace("_", " ").title()
+    render_page_header(
+        st,
+        "Operations Command Center",
+        "Market intelligence, asset operations, and dispatch economics in one platform.",
+        badge="Latest data",
+        environment="Production",
+    )
+    reporting_end = period.get("end_at") or metadata.get("generated_at")
+    st.caption(
+        f"Reporting period · Through {format_timestamp(reporting_end, zone)}"
+        f" · Last successful refresh {format_timestamp(refreshed_at, zone)}"
+        f" · Data freshness {format_timestamp(metadata.get('data_freshness_at'), zone)}"
+    )
 
-    render_section_header(st, "Executive Overview")
+    render_section_header(st, "Executive Performance")
     _cards(st, [
-        {"label": "Portfolio Value", "value": "Not available", "subtitle": "Requires valuation integration", "icon": "◇", "tooltip": "No authoritative valuation source is connected."},
-        {"label": "Today's Revenue", "value": format_currency(kpis["today_revenue"], currency), "subtitle": "Completed dispatch ledger", "icon": "$", "tone": _tone(kpis["today_revenue"])},
-        {"label": "Today's Profit", "value": format_currency(kpis["today_profit"], currency), "subtitle": data["data_quality"]["financial_values"].replace("_", " ").title(), "icon": "↗", "tone": _tone(kpis["today_profit"])},
-        {"label": "Available Capacity", "value": format_power(kpis["available_capacity_mw"]), "subtitle": "Configured active assets", "icon": "⚡"},
-        {"label": "Active Assets", "value": f'{kpis["active_assets"]:,}', "subtitle": "Portfolio fleet", "icon": "▦"},
-        {"label": "Today's Dispatches", "value": f'{kpis["today_dispatches"]:,}', "subtitle": f"Reporting timezone · {zone}", "icon": "↔"},
-        {"label": "Battery State of Charge", "value": "Not available", "subtitle": "Requires telemetry integration", "icon": "▤"},
-        {"label": "Current Market Price", "value": "Not available" if kpis["current_market_price_per_mwh"] is None else f'{format_currency(kpis["current_market_price_per_mwh"], currency)}/MWh', "subtitle": f'{metadata.get("market_type", "RTM")} · {metadata.get("market_location")}', "icon": "⌁"},
-        {"label": "Last API Sync", "value": format_timestamp(kpis["last_api_sync_at"], zone), "subtitle": f"Request latency · {payload['latency_ms']:.0f} ms", "icon": "◷", "tone": "positive"},
+        {"label": "Current CAISO RTM Price", "value": "Not available" if current_price is None else f"{format_currency(current_price, currency)}/MWh", "subtitle": f'{metadata.get("market_location") or "Pricing node unavailable"}', "icon": "⌁"},
+        {"label": "Active Assets", "value": f"{len(active_assets):,}", "subtitle": "Connected portfolio assets", "icon": "▦"},
+        {"label": "Available Power", "value": format_power(total_power), "subtitle": "Configured active-asset capacity", "icon": "⚡"},
+        {"label": "Total Energy Capacity", "value": format_energy(total_energy), "subtitle": "Configured active-asset energy", "icon": "▤"},
+        {"label": "Portfolio Revenue", "value": format_currency(total_revenue, currency), "subtitle": financial_classification, "icon": "$", "tone": _tone(total_revenue)},
+        {"label": "Charging Cost", "value": format_currency(total_cost, currency), "subtitle": "Completed dispatch ledger", "icon": "↓"},
+        {"label": "Portfolio Profit", "value": format_currency(total_profit, currency), "subtitle": financial_classification, "icon": "↗", "tone": _tone(total_profit)},
+        {"label": "Profit Margin", "value": _percent_label(profit_margin), "subtitle": "Profit divided by revenue", "icon": "%", "tone": _tone(total_profit)},
+        {"label": "Completed Dispatches", "value": f"{len(dispatches):,}", "subtitle": f"Reporting timezone · {zone}", "icon": "↔"},
+        {"label": "Average Profit / Dispatch", "value": "Not available" if not economic_rows else format_currency(total_profit / len(economic_rows), currency), "subtitle": "Complete economic records", "icon": "◇"},
+        {"label": "Total Discharged Energy", "value": format_energy(total_discharge), "subtitle": "Complete dispatch records", "icon": "⇥"},
+        {"label": "Last Successful Sync", "value": format_timestamp(kpis.get("last_api_sync_at") or refreshed_at, zone), "subtitle": f"Request latency · {payload.get('latency_ms', 0):.0f} ms", "icon": "◷", "tone": "positive"},
     ])
-
-    render_section_header(st, "System Health")
-    checked = format_timestamp(refreshed_at, zone)
-    status = data["status"]
-    render_system_status(st, [
-        ("API", status["api"].title(), status["api"] == "connected", f"Checked {checked} · {payload['latency_ms']:.0f} ms total request latency"),
-        ("Supabase", status["supabase"].title(), status["supabase"] == "connected", f"Ledger aggregation checked {checked}"),
-        ("CAISO Market Data", status["market_data"].replace("_", " ").title(), status["market_data"] == "connected", f"Latest interval {format_timestamp(metadata.get('market_updated_at'), zone)}"),
-        ("Simulation Engine", status["simulation_engine"].title(), status["simulation_engine"] == "ready", "Historical calculation workflow available"),
-    ])
-    render_data_freshness(st, format_timestamp(metadata.get("data_freshness_at"), zone))
     _market_section(st, data, currency, zone)
     _performance_section(st, data, currency, zone)
     _dispatch_section(st, data, currency, zone)
     _assets_section(st, payload, currency, zone)
 
-    render_section_header(st, "Future Capabilities")
+    render_section_header(st, "Platform Capabilities")
+    st.caption("Available today")
     render_capabilities(st, [
-        ("Battery Telemetry", "Will unlock live SOC, charge rate, temperature, alarms, and cycle tracking.", "Telemetry API"),
-        ("Portfolio Valuation", "Will unlock asset value, project returns, and portfolio NAV.", "Financial valuation source"),
-        ("Forecasting", "Will unlock price, load, and renewable generation outlooks.", "Forecast data service"),
-        ("Asset Health", "Will unlock condition monitoring, alarms, and maintenance risk.", "OEM or SCADA data"),
-        ("Fleet Optimization", "Will unlock coordinated multi-asset dispatch recommendations.", "Optimization engine"),
+        ("CAISO Market Data", "Current and historical CAISO pricing through the existing market-data integration.", "Connected"),
+        ("Dispatch Ledger", "Completed dispatch records with energy, revenue, charging cost, and profit.", "FastAPI"),
+        ("Portfolio Visibility", "Asset capacity, status, dispatch count, revenue, and profit in one portfolio view.", "Connected"),
+        ("Scenario Simulation", "Historical storage economics calculated from selected CAISO market inputs.", "Available"),
+        ("System Monitoring", "API, market-data, summary, freshness, and request-latency visibility.", "Available"),
+        ("API Architecture", "Dashboard and integrations consume the existing FastAPI service contracts.", "Available"),
+    ], status="Available")
+    st.caption("Planned capabilities")
+    render_capabilities(st, [
+        ("Battery Telemetry", "State of charge, operating limits, alarms, and condition data from connected assets.", "Telemetry integration"),
+        ("Automated Dispatch", "Coordinated dispatch recommendations and execution workflows across the fleet.", "Optimization engine"),
+        ("Price Forecasting", "Forward price and market-condition outlooks for operational planning.", "Forecast service"),
+        ("Portfolio Valuation", "Asset value, project returns, and portfolio-level financial analysis.", "Valuation source"),
+        ("Alerting", "Configurable operational and market-event notifications.", "Notification service"),
+        ("Access Controls", "Multi-user authentication, roles, and permissions.", "Identity service"),
+        ("Additional Markets", "Market integrations beyond the current CAISO footprint.", "Market connectors"),
     ])
+
+    render_section_header(st, "System Health")
+    checked = format_timestamp(refreshed_at, zone)
+    status = data.get("status") or {}
+    api_status = str(status.get("api") or "unknown")
+    market_status = str(status.get("market_data") or "unknown")
+    simulation_status = str(status.get("simulation_engine") or "unknown")
+    render_system_status(st, [
+        ("API", api_status.title(), api_status == "connected", f"Checked {checked} · {payload.get('latency_ms', 0):.0f} ms request latency"),
+        ("CAISO", market_status.replace("_", " ").title(), market_status == "connected", f"Latest interval {format_timestamp(metadata.get('market_updated_at'), zone)}"),
+        ("Dashboard Summary", "Available", True, f"Generated {format_timestamp(metadata.get('generated_at'), zone)}"),
+        ("Simulation Engine", simulation_status.title(), simulation_status == "ready", "Historical scenario workflow"),
+        ("Reporting Timezone", zone, True, "Applied to dashboard reporting dates"),
+        ("Platform Version", "v1.0.0", True, "PUBBA Power operations console"),
+    ])
+    render_data_freshness(st, format_timestamp(metadata.get("data_freshness_at"), zone))
 
 
 def render(st, client) -> None:

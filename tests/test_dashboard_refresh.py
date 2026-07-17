@@ -8,6 +8,7 @@ from dashboard.charts import (
     trend_figure,
 )
 from dashboard.pages.overview import (
+    _asset_presentation_mode,
     _daily_dispatch_metrics,
     _dispatch_chart_rows,
     _market_day_axis,
@@ -159,3 +160,44 @@ def test_duplicate_dispatch_times_receive_unique_readable_labels():
     assert rows[0]["label"] == "Jul 17 · 7:45 AM · #1"
     assert rows[1]["label"] == "Jul 17 · 7:45 AM · #2"
     assert rows[0]["classification"] == "Calculated Estimate"
+
+
+def test_zero_revenue_and_missing_energy_are_handled_without_fabrication():
+    zero_revenue = _daily_dispatch_metrics(
+        [dispatch(revenue=0, profit=0)], "America/Los_Angeles"
+    )
+    missing_energy = _daily_dispatch_metrics(
+        [dispatch(charge_energy_mwh=None)], "America/Los_Angeles"
+    )
+
+    assert zero_revenue[0]["profit_margin"] is None
+    assert zero_revenue[0]["profit_margin_label"] == "Not available"
+    assert missing_energy == []
+
+
+def test_invalid_timestamp_is_excluded_from_charts_but_does_not_raise():
+    assert _daily_dispatch_metrics(
+        [dispatch(timestamp="not-a-timestamp")], "America/Los_Angeles"
+    ) == []
+    assert _dispatch_chart_rows(
+        [dispatch(timestamp="not-a-timestamp")], "America/Los_Angeles"
+    ) == []
+
+
+def test_mixed_operational_and_calculated_dispatches_use_pattern_distinction():
+    rows = _dispatch_chart_rows(
+        [dispatch(data_quality="operational"), dispatch(data_quality="calculated_estimate")],
+        "America/Los_Angeles",
+    )
+    figure = dispatch_economics_figure(rows)
+
+    assert list(figure.data[0].marker.pattern.shape) == ["", "/"]
+    assert {row["classification"] for row in rows} == {
+        "Operational", "Calculated Estimate",
+    }
+
+
+def test_asset_presentation_scales_from_cards_to_table():
+    assert _asset_presentation_mode(1) == "cards"
+    assert _asset_presentation_mode(3) == "cards"
+    assert _asset_presentation_mode(4) == "table"
