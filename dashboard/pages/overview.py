@@ -37,12 +37,18 @@ def _tone(value: object) -> str:
 
 
 def _market_day_axis(prices: list[dict], zone: str) -> tuple[list[str], list[str]]:
-    """Return the full local trading-day range and two-hour tick positions."""
+    """Return midnight through two hours beyond the latest market interval."""
     latest = datetime.fromisoformat(str(prices[-1]["timestamp"]).replace("Z", "+00:00"))
-    local_day = latest.astimezone(ZoneInfo(zone)).date()
+    latest_local = latest.astimezone(ZoneInfo(zone))
+    local_day = latest_local.date()
     start = datetime.combine(local_day, time.min, tzinfo=ZoneInfo(zone))
-    end = start + timedelta(days=1)
-    ticks = [(start + timedelta(hours=hour)).isoformat() for hour in range(0, 24, 2)]
+    midnight = start + timedelta(days=1)
+    end = min(latest_local + timedelta(hours=2), midnight)
+    ticks = [
+        (start + timedelta(hours=hour)).isoformat()
+        for hour in range(0, 24, 2)
+        if start + timedelta(hours=hour) <= end
+    ]
     return [start.isoformat(), end.isoformat()], ticks
 
 

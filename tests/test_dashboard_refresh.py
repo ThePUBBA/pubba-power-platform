@@ -53,7 +53,7 @@ def test_single_point_trend_uses_categorical_axis():
     assert list(figure.data[0].x) == ["2026-07-17"]
 
 
-def test_market_axis_covers_entire_local_day_with_two_hour_ticks():
+def test_market_axis_extends_two_hours_beyond_latest_interval():
     day_range, ticks = _market_day_axis(
         [{"timestamp": "2026-07-17T15:45:00-07:00"}],
         "America/Los_Angeles",
@@ -61,8 +61,17 @@ def test_market_axis_covers_entire_local_day_with_two_hour_ticks():
 
     assert day_range == [
         "2026-07-17T00:00:00-07:00",
-        "2026-07-18T00:00:00-07:00",
+        "2026-07-17T17:45:00-07:00",
     ]
-    assert len(ticks) == 12
+    assert len(ticks) == 9
     assert ticks[0] == "2026-07-17T00:00:00-07:00"
-    assert ticks[-1] == "2026-07-17T22:00:00-07:00"
+    assert ticks[-1] == "2026-07-17T16:00:00-07:00"
+
+
+def test_market_axis_never_extends_beyond_midnight():
+    day_range, _ = _market_day_axis(
+        [{"timestamp": "2026-07-17T23:30:00-07:00"}],
+        "America/Los_Angeles",
+    )
+
+    assert day_range[-1] == "2026-07-18T00:00:00-07:00"
