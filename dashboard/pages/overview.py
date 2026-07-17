@@ -8,7 +8,17 @@ from zoneinfo import ZoneInfo
 
 import plotly.graph_objects as go
 
-from dashboard.charts import GRAY, GRID, MINT, WHITE, style_chart, trend_figure
+from dashboard.charts import (
+    CHART_CONFIG,
+    GRAY,
+    GRID,
+    MINT,
+    WHITE,
+    daily_energy_figure,
+    daily_financial_figure,
+    dispatch_economics_figure,
+    style_chart,
+)
 from dashboard.components import (
     render_capabilities,
     render_data_freshness,
@@ -17,6 +27,7 @@ from dashboard.components import (
     render_page_header,
     render_refresh_countdown,
     render_section_header,
+    render_summary_grid,
     render_system_status,
 )
 from dashboard.formatting import (
@@ -24,6 +35,7 @@ from dashboard.formatting import (
     format_chart_time_tick,
     format_currency,
     format_date,
+    format_dispatch_axis_label,
     format_dispatch_timestamp,
     format_energy,
     format_power,
@@ -35,6 +47,100 @@ from dashboard.refresh import refresh_dashboard_data
 def _tone(value: object) -> str:
     number = as_decimal(value)
     return "positive" if number > 0 else "negative" if number < 0 else "neutral"
+
+
+def _numeric(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(as_decimal(value))
+    except ValueError:
+        return None
+
+
+def _margin(profit: float, revenue: float) -> float | None:
+    return profit / revenue if revenue else None
+
+
+def _percent_label(value: float | None) -> str:
+    return "Not available" if value is None else f"{value:.1%}"
+
+
+def _daily_dispatch_metrics(dispatches: list[dict], zone: str) -> list[dict]:
+    """Aggregate complete returned dispatch values into honest reporting-day rows."""
+    grouped: dict[str, dict] = {}
+    required = (
+        "revenue", "charging_cost", "profit",
+        "charge_energy_mwh", "discharge_energy_mwh",
+    )
+    for dispatch in dispatches:
+        timestamp = dispatch.get("timestamp")
+        values = {field: _numeric(dispatch.get(field)) for field in required}
+        if not timestamp or any(value is None for value in values.values()):
+            continue
+        try:
+            parsed = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+            date_key = parsed.astimezone(ZoneInfo(zone)).date().isoformat()
+        except (TypeError, ValueError):
+            continue
+        row = grouped.setdefault(date_key, {
+            "date": date_key,
+            "label": format_date(date_key),
+            "revenue": 0.0,
+            "charging_cost": 0.0,
+            "profit": 0.0,
+            "charge_energy_mwh": 0.0,
+            "discharge_energy_mwh": 0.0,
+            "dispatches": 0,
+        })
+        for field, value in values.items():
+            row[field] += value
+        row["dispatches"] += 1
+    rows = [grouped[key] for key in sorted(grouped)]
+    for row in rows:
+        row["profit_margin"] = _margin(row["profit"], row["revenue"])
+        row["profit_margin_label"] = _percent_label(row["profit_margin"])
+        row["efficiency"] = (
+            row["discharge_energy_mwh"] / row["charge_energy_mwh"]
+            if row["charge_energy_mwh"] > 0 else None
+        )
+        row["efficiency_label"] = _percent_label(row["efficiency"])
+    return rows
+
+
+def _dispatch_chart_rows(dispatches: list[dict], zone: str) -> list[dict]:
+    required = (
+        "revenue", "charging_cost", "profit",
+        "charge_energy_mwh", "discharge_energy_mwh",
+    )
+    complete = []
+    for dispatch in sorted(dispatches, key=lambda row: str(row.get("timestamp") or "")):
+        values = {field: _numeric(dispatch.get(field)) for field in required}
+        if not dispatch.get("timestamp") or any(value is None for value in values.values()):
+            continue
+        classification_key = str(dispatch.get("data_quality") or "not_recorded")
+        complete.append({
+            **values,
+            "timestamp": dispatch["timestamp"],
+            "timestamp_label": format_dispatch_timestamp(dispatch["timestamp"], zone),
+            "base_label": format_dispatch_axis_label(dispatch["timestamp"], zone),
+            "asset": dispatch.get("asset_id") or "Unassigned",
+            "market": dispatch.get("market") or "Not recorded",
+            "node": dispatch.get("location") or "Not recorded",
+            "classification_key": classification_key,
+            "classification": classification_key.replace("_", " ").title(),
+        })
+    totals: dict[str, int] = {}
+    for row in complete:
+        totals[row["base_label"]] = totals.get(row["base_label"], 0) + 1
+    seen: dict[str, int] = {}
+    for row in complete:
+        base = row["base_label"]
+        seen[base] = seen.get(base, 0) + 1
+        row["label"] = f"{base} · #{seen[base]}" if totals[base] > 1 else base
+        row["profit_margin"] = _margin(row["profit"], row["revenue"])
+        row["profit_margin_label"] = _percent_label(row["profit_margin"])
+    return complete
 
 
 def _market_day_axis(prices: list[dict], zone: str) -> tuple[list[str], list[str]]:
@@ -141,33 +247,65 @@ def _market_section(st, data: dict, currency: str, zone: str) -> None:
         y_title=f"{currency}/MWh", height=430,
     )
     fig.update_layout(hovermode="closest")
-    st.plotly_chart(fig, width="stretch")
+    st.plotly_chart(fig, width="stretch", config=CHART_CONFIG)
     st.caption(f"Latest interval {format_timestamp(metadata.get('market_updated_at'), zone)}")
 
 
-def _performance_section(st, data: dict, currency: str) -> None:
+def _performance_section(st, data: dict, currency: str, zone: str) -> None:
     render_section_header(st, "Portfolio Performance")
-    daily = data["series"].get("daily", [])
+    dispatches = data["series"].get("dispatches", [])
+    daily = _daily_dispatch_metrics(dispatches, zone)
     if not daily:
-        st.info("Completed dispatch history is required before portfolio performance trends can be displayed.")
+        st.info("Complete dispatch economics are required before portfolio performance can be displayed.")
         return
-    chart_daily = [{**row, "date": format_date(row.get("date"))} for row in daily]
-    left, right = st.columns(2)
-    one_point = len(daily) == 1
-    note = "Single reporting date; additional dispatch history will create a trend." if one_point else "Completed dispatch ledger by reporting date."
-    with left:
-        fig = trend_figure(chart_daily, "revenue", name="Revenue", color=MINT, currency=True)
-        st.plotly_chart(style_chart(fig, title="Revenue over time", subtitle=note, y_title=f"{currency} ($)"), width="stretch")
-    with right:
-        fig = trend_figure(chart_daily, "profit", name="Profit", color=WHITE, currency=True)
-        st.plotly_chart(style_chart(fig, title="Profit over time", subtitle=note, y_title=f"{currency} ($)"), width="stretch")
-    fig = go.Figure(go.Bar(
-        x=[row["date"] for row in chart_daily], y=[row["throughput_mwh"] for row in chart_daily],
-        marker_color=MINT, name="Throughput", hovertemplate="%{x}<br>%{y:,.2f} MWh<extra></extra>",
-    ))
-    if one_point:
-        fig.update_xaxes(type="category")
-    st.plotly_chart(style_chart(fig, title="Daily energy throughput", subtitle=note, y_title="MWh"), width="stretch")
+    total_revenue = sum(row["revenue"] for row in daily)
+    total_cost = sum(row["charging_cost"] for row in daily)
+    total_profit = sum(row["profit"] for row in daily)
+    total_dispatches = sum(row["dispatches"] for row in daily)
+    total_margin = _margin(total_profit, total_revenue)
+    best_profit = max(daily, key=lambda row: row["profit"])
+    best_revenue = max(daily, key=lambda row: row["revenue"])
+    margin_rows = [row for row in daily if row["profit_margin"] is not None]
+    best_margin = max(margin_rows, key=lambda row: row["profit_margin"]) if margin_rows else None
+    lowest_profit = min(daily, key=lambda row: row["profit"])
+    total_discharge = sum(row["discharge_energy_mwh"] for row in daily)
+    render_summary_grid(st, [
+        ("Total revenue", format_currency(total_revenue, currency)),
+        ("Total charging cost", format_currency(total_cost, currency)),
+        ("Total profit", format_currency(total_profit, currency)),
+        ("Profit margin", _percent_label(total_margin)),
+        ("Best-performing day", f'{best_profit["label"]} · {format_currency(best_profit["profit"], currency)}'),
+        ("Average profit / dispatch", format_currency(total_profit / total_dispatches, currency)),
+    ])
+    financial = style_chart(
+        daily_financial_figure(daily),
+        title="Daily financial performance",
+        subtitle="Gross revenue, charging cost, and retained profit from completed dispatch records.",
+        y_title=f"{currency} ($)",
+        height=440,
+    )
+    st.plotly_chart(financial, width="stretch", config=CHART_CONFIG)
+    margin_text = (
+        f'{best_margin["label"]} at {_percent_label(best_margin["profit_margin"])}'
+        if best_margin else "Not available"
+    )
+    st.caption(
+        f'Highest revenue · {best_revenue["label"]} ({format_currency(best_revenue["revenue"], currency)})'
+        f' · Lowest profit · {lowest_profit["label"]} ({format_currency(lowest_profit["profit"], currency)})'
+        f' · Best profit margin · {margin_text}'
+    )
+    energy = style_chart(
+        daily_energy_figure(daily),
+        title="Daily energy movement",
+        subtitle="Charge and discharge energy by reporting date; energy ratio equals discharge divided by charge.",
+        y_title="MWh",
+        height=420,
+    )
+    st.plotly_chart(energy, width="stretch", config=CHART_CONFIG)
+    st.caption(
+        f"Total completed dispatches · {total_dispatches:,}"
+        f" · Total discharged energy · {total_discharge:,.2f} MWh"
+    )
 
 
 def _dispatch_section(st, data: dict, currency: str, zone: str) -> None:
@@ -176,28 +314,57 @@ def _dispatch_section(st, data: dict, currency: str, zone: str) -> None:
     if not dispatches:
         st.info("No completed operational or simulation-derived dispatch records are available.")
         return
-    display_times = [format_dispatch_timestamp(row.get("timestamp"), zone) for row in dispatches]
-    fig = go.Figure(go.Scatter(
-        x=display_times, y=[row["discharge_energy_mwh"] for row in dispatches],
-        mode="markers", marker={"color": MINT, "size": 11}, name="Dispatch",
-        customdata=[[display_time, row.get("asset_id"), row.get("profit")] for display_time, row in zip(display_times, dispatches)],
-        hovertemplate="%{customdata[0]}<br>%{y:,.2f} MWh<br>Asset %{customdata[1]}<br>Profit $%{customdata[2]:,.2f}<extra></extra>",
-    ))
-    fig.update_xaxes(type="category")
-    st.plotly_chart(style_chart(fig, title="Dispatch timeline", subtitle="Completed ledger events; simulated records remain explicitly classified.", y_title="Discharged MWh"), width="stretch")
+    chart_rows = _dispatch_chart_rows(dispatches, zone)
+    if chart_rows:
+        classifications = sorted({row["classification"] for row in chart_rows})
+        dispatch_chart = style_chart(
+            dispatch_economics_figure(chart_rows),
+            title="Dispatch economics",
+            subtitle="Revenue, charging cost, and retained profit for each completed dispatch.",
+            y_title=f"{currency} ($)",
+            height=460,
+        )
+        st.plotly_chart(dispatch_chart, width="stretch", config=CHART_CONFIG)
+        best = max(chart_rows, key=lambda row: row["profit"])
+        st.caption(
+            f'Best dispatch · {best["label"]} ({format_currency(best["profit"], currency)} profit)'
+            f' · Classification shown by hatch pattern and hover detail · {", ".join(classifications)}'
+        )
+    else:
+        st.info("Complete dispatch economics are unavailable for charting; records remain in the table below.")
     rows = [{
         "Time": format_dispatch_timestamp(row.get("timestamp"), zone),
         "Asset": row.get("asset_id") or "Unassigned",
-        "Charge MWh": float(row.get("charge_energy_mwh") or 0),
-        "Discharge MWh": float(row.get("discharge_energy_mwh") or 0),
-        "Revenue": format_currency(row.get("revenue"), currency),
-        "Charging Cost": format_currency(row.get("charging_cost"), currency),
-        "Profit": format_currency(row.get("profit"), currency),
+        "Charge MWh": _numeric(row.get("charge_energy_mwh")),
+        "Discharge MWh": _numeric(row.get("discharge_energy_mwh")),
+        "Revenue": _numeric(row.get("revenue")),
+        "Charging Cost": _numeric(row.get("charging_cost")),
+        "Profit": _numeric(row.get("profit")),
+        "Profit Margin": _margin(
+            _numeric(row.get("profit")) or 0,
+            _numeric(row.get("revenue")) or 0,
+        ),
         "Market": row.get("market") or "Not recorded",
         "Node": row.get("location") or "Not recorded",
         "Classification": str(row.get("data_quality", "")).replace("_", " ").title(),
     } for row in reversed(dispatches[-10:])]
-    st.dataframe(rows, width="stretch", hide_index=True)
+    st.dataframe(
+        rows,
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "Time": st.column_config.TextColumn(width="medium"),
+            "Asset": st.column_config.TextColumn(width="medium"),
+            "Charge MWh": st.column_config.NumberColumn(format="%.2f MWh"),
+            "Discharge MWh": st.column_config.NumberColumn(format="%.2f MWh"),
+            "Revenue": st.column_config.NumberColumn(format="$%.2f"),
+            "Charging Cost": st.column_config.NumberColumn(format="$%.2f"),
+            "Profit": st.column_config.NumberColumn(format="$%.2f"),
+            "Profit Margin": st.column_config.NumberColumn(format="percent"),
+            "Node": st.column_config.TextColumn(width="large"),
+            "Classification": st.column_config.TextColumn(width="medium"),
+        },
+    )
 
 
 def _assets_section(st, payload: dict, currency: str, zone: str) -> None:
@@ -270,7 +437,7 @@ def _render_live(st, client) -> None:
     ])
     render_data_freshness(st, format_timestamp(metadata.get("data_freshness_at"), zone))
     _market_section(st, data, currency, zone)
-    _performance_section(st, data, currency)
+    _performance_section(st, data, currency, zone)
     _dispatch_section(st, data, currency, zone)
     _assets_section(st, payload, currency, zone)
 

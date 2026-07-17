@@ -3,7 +3,7 @@
 import plotly.graph_objects as go
 
 from dashboard.api_client import DashboardApiError, Only1ApiClient
-from dashboard.charts import GRAY, MINT, style_chart
+from dashboard.charts import CHART_CONFIG, GRAY, MINT, style_chart
 from dashboard.components import (
     render_kpi_card,
     render_notice,
@@ -93,7 +93,16 @@ def render(st, client: Only1ApiClient) -> None:
             discharge_times = [format_timestamp(p["timestamp"], "America/Los_Angeles") for p in discharge_points]
             fig.add_trace(go.Scatter(x=discharge_times, y=[p["price"] for p in discharge_points], customdata=discharge_times, name="Discharge window", line={"color": MINT, "width": 3}, hovertemplate="%{customdata}<br>$%{y:,.2f}/MWh<extra></extra>"))
         fig.update_xaxes(type="category")
-        st.plotly_chart(style_chart(fig, title="Historical charge and discharge windows", subtitle=f"{market} · {location} · {simulation_date.isoformat()}", y_title="USD/MWh"), width="stretch")
+        st.plotly_chart(
+            style_chart(
+                fig,
+                title="Historical charge and discharge windows",
+                subtitle=f"{market} · {location} · {simulation_date.isoformat()}",
+                y_title="USD/MWh",
+            ),
+            width="stretch",
+            config=CHART_CONFIG,
+        )
 
     with st.expander("Simulation assumptions and classification"):
         st.json({

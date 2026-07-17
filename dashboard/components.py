@@ -275,6 +275,34 @@ def install_console_theme(st) -> None:
             background: var(--pubba-accent);
             box-shadow: 0 0 10px rgba(68, 255, 187, .35);
         }
+        .pubba-summary-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: .75rem;
+            margin: .45rem 0 1rem;
+        }
+        .pubba-summary-item {
+            min-width: 0;
+            background: var(--pubba-card);
+            border: 1px solid var(--pubba-border);
+            border-radius: 12px;
+            padding: .8rem .9rem;
+        }
+        .pubba-summary-label {
+            color: var(--pubba-muted);
+            font-family: var(--font-display);
+            font-size: .68rem;
+            letter-spacing: .06em;
+            text-transform: uppercase;
+        }
+        .pubba-summary-value {
+            color: var(--pubba-text);
+            font-family: var(--font-display);
+            font-size: 1.22rem;
+            line-height: 1.1;
+            margin-top: .35rem;
+            overflow-wrap: anywhere;
+        }
 
         [data-testid="stForm"] {
             background: var(--pubba-surface);
@@ -394,6 +422,7 @@ def install_console_theme(st) -> None:
             .block-container { padding: 2rem 1rem 3rem; }
             .pubba-page-header { align-items: flex-start; flex-direction: column; }
             .pubba-kpi { min-height: 104px; }
+            .pubba-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .pubba-status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .pubba-capability-grid { grid-template-columns: 1fr; }
         }
@@ -461,6 +490,20 @@ def render_kpi_card(
         f'<div class="pubba-kpi-icon">{escape(icon)}</div></div>'
         f'<div class="pubba-kpi-value">{escape(value)}</div>'
         f'<div class="pubba-kpi-subtitle">{escape(subtitle)}</div></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_summary_grid(st, items: list[tuple[str, str]]) -> None:
+    cards = "".join(
+        '<div class="pubba-summary-item">'
+        f'<div class="pubba-summary-label">{escape(label)}</div>'
+        f'<div class="pubba-summary-value">{escape(value)}</div>'
+        '</div>'
+        for label, value in items
+    )
+    st.markdown(
+        f'<div class="pubba-summary-grid">{cards}</div>',
         unsafe_allow_html=True,
     )
 

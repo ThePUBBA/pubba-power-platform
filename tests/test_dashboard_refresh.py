@@ -1,6 +1,17 @@
 from dashboard.api_client import DashboardApiError
-from dashboard.charts import style_chart, trend_figure
-from dashboard.pages.overview import _market_day_axis
+from dashboard.charts import (
+    daily_energy_figure,
+    daily_financial_figure,
+    dispatch_economics_figure,
+    observation_mode,
+    style_chart,
+    trend_figure,
+)
+from dashboard.pages.overview import (
+    _daily_dispatch_metrics,
+    _dispatch_chart_rows,
+    _market_day_axis,
+)
 from dashboard.refresh import STATE_KEY, refresh_dashboard_data
 
 
@@ -90,3 +101,61 @@ def test_market_axis_never_extends_beyond_midnight():
     )
 
     assert day_range[-1] == "2026-07-18T00:00:00-07:00"
+
+
+def dispatch(**overrides):
+    row = {
+        "timestamp": "2026-07-17T14:45:00+00:00",
+        "asset_id": "LDES-Unit-A01",
+        "charge_energy_mwh": 50,
+        "discharge_energy_mwh": 40,
+        "revenue": 1000,
+        "charging_cost": 600,
+        "profit": 400,
+        "market": "RTM",
+        "location": "TH_NP15_GEN-APND",
+        "data_quality": "calculated_estimate",
+    }
+    row.update(overrides)
+    return row
+
+
+def test_daily_metrics_use_only_complete_returned_dispatch_values():
+    rows = _daily_dispatch_metrics(
+        [dispatch(), dispatch(profit=200, revenue=500, charging_cost=300), dispatch(profit=None)],
+        "America/Los_Angeles",
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["revenue"] == 1500
+    assert rows[0]["charging_cost"] == 900
+    assert rows[0]["profit"] == 600
+    assert rows[0]["dispatches"] == 2
+    assert rows[0]["profit_margin_label"] == "40.0%"
+    assert rows[0]["efficiency_label"] == "80.0%"
+
+
+def test_executive_chart_builders_use_grouped_categorical_bars():
+    daily = _daily_dispatch_metrics([dispatch()], "America/Los_Angeles")
+    financial = daily_financial_figure(daily)
+    energy = daily_energy_figure(daily)
+    dispatch_rows = _dispatch_chart_rows([dispatch()], "America/Los_Angeles")
+    economics = dispatch_economics_figure(dispatch_rows)
+
+    assert observation_mode(1) == "single"
+    assert observation_mode(3) == "sparse"
+    assert observation_mode(4) == "categorical"
+    assert len(financial.data) == 3
+    assert len(energy.data) == 2
+    assert len(economics.data) == 3
+    assert financial.layout.barmode == "group"
+    assert energy.layout.xaxis.type == "category"
+    assert economics.layout.xaxis.type == "category"
+
+
+def test_duplicate_dispatch_times_receive_unique_readable_labels():
+    rows = _dispatch_chart_rows([dispatch(), dispatch(profit=500)], "America/Los_Angeles")
+
+    assert rows[0]["label"] == "Jul 17 · 7:45 AM · #1"
+    assert rows[1]["label"] == "Jul 17 · 7:45 AM · #2"
+    assert rows[0]["classification"] == "Calculated Estimate"
