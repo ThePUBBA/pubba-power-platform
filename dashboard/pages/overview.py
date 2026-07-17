@@ -80,6 +80,11 @@ def _market_section(st, data: dict, currency: str, zone: str) -> None:
     values = [point["price_per_mwh"] for point in prices]
     market_times = [format_timestamp(point["timestamp"], zone) for point in prices]
     day_range, tick_values = _market_day_axis(prices, zone)
+    latest_timestamp = prices[-1]["timestamp"]
+    latest_local = datetime.fromisoformat(
+        str(latest_timestamp).replace("Z", "+00:00")
+    ).astimezone(ZoneInfo(zone))
+    label_on_left = latest_local.hour >= 21
     fig = go.Figure(go.Scatter(
         x=[point["timestamp"] for point in prices], y=values,
         customdata=market_times,
@@ -98,12 +103,13 @@ def _market_section(st, data: dict, currency: str, zone: str) -> None:
     )
     fig.add_hline(y=current, line_dash="dot", line_color=GRAY)
     fig.add_annotation(
-        x=tick_values[-1],
+        x=latest_timestamp,
         y=current,
         text=f"Current ${current:,.2f}",
         showarrow=False,
-        xanchor="center",
+        xanchor="right" if label_on_left else "left",
         yanchor="bottom",
+        xshift=-12 if label_on_left else 12,
         yshift=10,
         font={"color": WHITE, "size": 12},
         bgcolor="#171717",
