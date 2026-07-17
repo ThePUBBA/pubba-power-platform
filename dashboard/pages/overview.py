@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, time, timedelta
+from math import floor
 from zoneinfo import ZoneInfo
 
 import plotly.graph_objects as go
@@ -108,11 +109,12 @@ def _market_section(st, data: dict, currency: str, zone: str) -> None:
         range=day_range,
     )
     upper_price = max(values)
-    upper_padding = max(2.0, (upper_price - 10.0) * 0.08)
+    upper_axis = max(20, (floor(upper_price / 10) + 1) * 10)
     fig.update_yaxes(
-        range=[10, upper_price + upper_padding],
+        range=[10, upper_axis],
+        dtick=10,
         tickprefix="$",
-        tickformat=",.2f",
+        tickformat=",.0f",
     )
     fig.add_hline(y=current, line_dash="dot", line_color=GRAY)
     fig.add_annotation(
