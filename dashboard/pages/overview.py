@@ -97,6 +97,19 @@ def _market_section(st, data: dict, currency: str, zone: str) -> None:
         range=day_range,
     )
     fig.add_hline(y=current, line_dash="dot", line_color=GRAY)
+    fig.add_annotation(
+        x=tick_values[-1],
+        y=current,
+        text=f"Current ${current:,.2f}",
+        showarrow=False,
+        xanchor="center",
+        yanchor="bottom",
+        yshift=10,
+        font={"color": WHITE, "size": 12},
+        bgcolor="#171717",
+        bordercolor="#2A2A2A",
+        borderpad=5,
+    )
     fig = style_chart(
         fig, title="CAISO market price curve",
         subtitle=f"{metadata.get('market_name', 'CAISO')} · {metadata.get('market_type', 'RTM')} · {metadata.get('market_location')}",
