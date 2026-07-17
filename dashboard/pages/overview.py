@@ -1,33 +1,41 @@
-"""Executive Overview Streamlit page."""
+"""Live executive Overview Streamlit page."""
 
 from __future__ import annotations
 
-from datetime import date
+from decimal import Decimal
+
+import plotly.graph_objects as go
 
 from dashboard.api_client import DashboardApiError, Only1ApiClient
 from dashboard.components import (
     render_data_freshness,
-    render_empty_state,
     render_error_state,
     render_kpi_card,
     render_page_header,
     render_section_header,
+    render_system_status,
 )
 from dashboard.formatting import (
     as_decimal,
     format_currency,
-    format_energy,
     format_power,
-    format_spread,
     format_timestamp,
-    format_trading_return,
 )
-from dashboard.state import DashboardStateError, custom_date_range, is_empty_summary
+
+
+MINT = "#44FFBB"
+WHITE = "#FFFFFF"
+MUTED = "#A7A7A7"
+GRID = "#2A2A2A"
 
 
 def _tone(value: object) -> str:
     number = as_decimal(value)
     return "positive" if number > 0 else "negative" if number < 0 else "neutral"
+
+
+def _available(value: object, formatter) -> str:
+    return "Not available" if value is None else formatter(value)
 
 
 def _cards(st, cards: list[tuple[str, str, str]], columns: int = 3) -> None:
@@ -38,124 +46,130 @@ def _cards(st, cards: list[tuple[str, str, str]], columns: int = 3) -> None:
                 render_kpi_card(st, label, value, tone=tone)
 
 
+def _layout(fig: go.Figure, title: str, y_title: str = "") -> go.Figure:
+    fig.update_layout(
+        title=title,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font={"color": WHITE, "family": "Inter, Arial, sans-serif"},
+        margin={"l": 45, "r": 20, "t": 55, "b": 40},
+        hovermode="x unified",
+        legend={"orientation": "h", "y": 1.08, "x": 1, "xanchor": "right"},
+    )
+    fig.update_xaxes(gridcolor=GRID, zeroline=False)
+    fig.update_yaxes(gridcolor=GRID, zeroline=False, title=y_title)
+    return fig
+
+
+def _empty_chart(st, title: str, message: str) -> None:
+    render_section_header(st, title)
+    st.info(message)
+
+
 def render(st, client: Only1ApiClient) -> None:
     render_page_header(
         st,
-        "Portfolio Overview",
-        "Authoritative financial, operational, and fleet intelligence across the portfolio.",
-        badge="Live portfolio",
+        "Executive Operations",
+        "Live portfolio economics, dispatch activity, fleet capacity, and market intelligence.",
+        badge="Live data",
     )
-    _, refresh = st.columns([5, 1])
-    with refresh:
-        st.button("Refresh", type="primary", use_container_width=True)
-
-    control_a, control_b = st.columns([1, 2])
-    with control_a:
-        range_mode = st.selectbox("Summary range", ["Lifetime", "Custom"])
-    with control_b:
+    toolbar, refresh = st.columns([5, 1])
+    with toolbar:
         timezone_name = st.text_input(
-            "Reporting timezone override",
+            "Dashboard timezone override",
             placeholder="Use portfolio default",
-            help="Optional IANA timezone, for example America/Los_Angeles.",
+            help="Optional IANA timezone, for example America/Denver.",
         )
-
-    start_at = end_at = None
-    if range_mode == "Custom":
-        start_col, end_col = st.columns(2)
-        with start_col:
-            start_date = st.date_input("Start date", value=date.today())
-        with end_col:
-            end_date = st.date_input("End date", value=date.today())
-        if not timezone_name.strip():
-            render_error_state(
-                st, "A reporting timezone is required for a custom date range."
-            )
-            return
-        try:
-            start_at, end_at = custom_date_range(
-                start_date, end_date, timezone_name
-            )
-        except DashboardStateError as exc:
-            render_error_state(st, str(exc))
-            return
+    with refresh:
+        st.write("")
+        st.button("Refresh", type="primary", width="stretch")
 
     try:
-        with st.spinner("Loading authoritative portfolio metrics…"):
-            summary = client.get_portfolio_summary(
-                start_at=start_at,
-                end_at=end_at,
-                timezone_name=timezone_name or None,
-            )
+        with st.spinner("Loading live executive data…"):
+            data = client.get_dashboard_summary(timezone_name=timezone_name or None)
     except DashboardApiError as exc:
         render_error_state(st, str(exc))
         return
 
-    portfolio = summary["portfolio"]
-    financial = summary["financial"]
-    revenue = summary["period_revenue"]
-    operations = summary["operations"]
-    fleet = summary["fleet"]
-    metadata = summary["metadata"]
-    reporting_timezone = summary["period"]["timezone"]
-    currency = portfolio["currency_code"]
-    market = portfolio["default_market"]
+    kpis = data["kpis"]
+    series = data["series"]
+    status = data["status"]
+    metadata = data["metadata"]
+    zone = data["period"]["timezone"]
+    currency = data["portfolio"]["currency_code"]
 
-    st.markdown(
-        f"{portfolio['name']}  ·  Market: {market}  ·  "
-        f"Reporting timezone: {reporting_timezone}  ·  "
-        f"Last refresh: {format_timestamp(metadata['generated_at'], reporting_timezone)}",
-        unsafe_allow_html=False,
+    _cards(st, [
+        ("Portfolio Value", "Not available", "neutral"),
+        ("Today's Revenue", format_currency(kpis["today_revenue"], currency), _tone(kpis["today_revenue"])),
+        ("Today's Profit", format_currency(kpis["today_profit"], currency), _tone(kpis["today_profit"])),
+        ("Available Capacity", format_power(kpis["available_capacity_mw"]), "neutral"),
+        ("Active Assets", f'{kpis["active_assets"]:,}', "neutral"),
+        ("Today's Dispatches", f'{kpis["today_dispatches"]:,}', "neutral"),
+        ("Battery State of Charge", "Not available", "neutral"),
+        ("Current Market Price", _available(kpis["current_market_price_per_mwh"], lambda value: f'{format_currency(value, currency)}/MWh'), "neutral"),
+        ("Last API Sync", format_timestamp(kpis["last_api_sync_at"], zone), "positive"),
+    ])
+    quality = data["data_quality"]["financial_values"].replace("_", " ").title()
+    st.caption(
+        f"Financial ledger classification: {quality}. Available capacity is configured active-asset capacity. "
+        "Portfolio valuation and battery SOC require sources that are not currently present."
     )
+
+    render_section_header(st, "System status")
+    render_system_status(st, [
+        ("API", status["api"].replace("_", " ").title(), status["api"] == "connected"),
+        ("Supabase", status["supabase"].replace("_", " ").title(), status["supabase"] == "connected"),
+        ("CAISO Market Data", status["market_data"].replace("_", " ").title(), status["market_data"] == "connected"),
+        ("Simulation Engine", status["simulation_engine"].replace("_", " ").title(), status["simulation_engine"] == "ready"),
+    ])
     render_data_freshness(
         st,
-        format_timestamp(
-            metadata["data_freshness_at"],
-            reporting_timezone,
-            fallback="No operational updates",
-        ),
+        format_timestamp(metadata.get("data_freshness_at"), zone, fallback="No ledger updates"),
     )
-    if is_empty_summary(summary):
-        render_empty_state(st)
 
-    render_section_header(st, "Financial performance")
-    _cards(st, [
-        ("Total Portfolio Profit", format_currency(financial["total_portfolio_profit"], currency), _tone(financial["total_portfolio_profit"])),
-        ("Gross Revenue", format_currency(financial["gross_revenue"], currency), "neutral"),
-        ("Charging Cost", format_currency(financial["charging_cost"], currency), "neutral"),
-        ("Net Profit", format_currency(financial["net_profit"], currency), _tone(financial["net_profit"])),
-        ("Trading Return", format_trading_return(financial["trading_return"]), _tone(financial["trading_return"])),
-        ("Weighted Average Spread", format_spread(financial["weighted_average_spread_per_mwh"], currency), _tone(financial["weighted_average_spread_per_mwh"])),
-    ])
+    daily = series.get("daily", [])
+    if daily:
+        left, right = st.columns(2)
+        with left:
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=[row["date"] for row in daily], y=[row["revenue"] for row in daily], name="Revenue", line={"color": MINT, "width": 3}))
+            st.plotly_chart(_layout(fig, "Revenue over time", currency), width="stretch")
+        with right:
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=[row["date"] for row in daily], y=[row["profit"] for row in daily], name="Profit", line={"color": WHITE, "width": 3}))
+            st.plotly_chart(_layout(fig, "Profit over time", currency), width="stretch")
 
-    render_section_header(st, "Current-period revenue")
-    _cards(st, [
-        ("Revenue Today", format_currency(revenue["today"], currency), _tone(revenue["today"])),
-        ("Revenue This Week", format_currency(revenue["week"], currency), _tone(revenue["week"])),
-        ("Revenue This Month", format_currency(revenue["month"], currency), _tone(revenue["month"])),
-        ("Revenue This Quarter", format_currency(revenue["quarter"], currency), _tone(revenue["quarter"])),
-        ("Revenue This Year", format_currency(revenue["year"], currency), _tone(revenue["year"])),
-    ])
+        left, right = st.columns(2)
+        with left:
+            fig = go.Figure(go.Bar(x=[row["date"] for row in daily], y=[row["throughput_mwh"] for row in daily], marker_color=MINT, name="Throughput"))
+            st.plotly_chart(_layout(fig, "Daily energy throughput", "MWh"), width="stretch")
+        with right:
+            dispatches = series.get("dispatches", [])
+            fig = go.Figure(go.Scatter(
+                x=[row["timestamp"] for row in dispatches],
+                y=[row["energy_mwh"] for row in dispatches],
+                mode="markers", marker={"color": MINT, "size": 10}, name="Dispatch",
+                text=[row.get("asset_id") or "Unassigned asset" for row in dispatches],
+            ))
+            st.plotly_chart(_layout(fig, "Dispatch timeline", "MWh"), width="stretch")
+    else:
+        _empty_chart(st, "Portfolio trends", "No completed dispatch records are available for revenue, profit, throughput, or dispatch charts.")
 
-    render_section_header(st, "Operations")
-    _cards(st, [
-        ("Total Dispatches", f"{operations['total_dispatches']:,}", "neutral"),
-        ("Purchased Energy", format_energy(operations["purchased_energy_mwh"]), "neutral"),
-        ("Sold Energy", format_energy(operations["sold_energy_mwh"]), "neutral"),
-        ("Energy Throughput", format_energy(operations["energy_throughput_mwh"]), "neutral"),
-        ("Last Dispatch", format_timestamp(operations["last_dispatch_at"], reporting_timezone, fallback="No completed dispatches"), "neutral"),
-    ])
+    prices = series.get("market_prices", [])
+    if prices:
+        fig = go.Figure(go.Scatter(x=[row["timestamp"] for row in prices], y=[row["price_per_mwh"] for row in prices], line={"color": MINT, "width": 3}, name="CAISO RTM LMP"))
+        st.plotly_chart(_layout(fig, "CAISO market price curve", f"{currency}/MWh"), width="stretch")
+    else:
+        _empty_chart(st, "CAISO market price curve", "Live CAISO pricing is currently unavailable. No market prices are being inferred or cached as live values.")
 
-    render_section_header(st, "Fleet")
-    _cards(st, [
-        ("Active Assets", f"{fleet['active_assets']:,}", "neutral"),
-        ("Fleet Power Capacity", format_power(fleet["power_capacity_mw"]), "neutral"),
-        ("Fleet Energy Capacity", format_energy(fleet["energy_capacity_mwh"]), "neutral"),
-    ])
+    unavailable_a, unavailable_b = st.columns(2)
+    with unavailable_a:
+        _empty_chart(st, "Battery state of charge", "No state-of-charge telemetry or history is available through the backend yet.")
+    with unavailable_b:
+        _empty_chart(st, "Asset utilization", "No authoritative asset-availability hours are stored, so utilization is not estimated.")
 
-    st.divider()
     st.caption(
-        f"Metric version {metadata['metric_version']}  ·  Currency {currency}  ·  "
-        f"Reporting timezone {reporting_timezone}  ·  "
-        f"Generated {format_timestamp(metadata['generated_at'], reporting_timezone)}  ·  "
-        f"Data freshness {format_timestamp(metadata['data_freshness_at'], reporting_timezone, fallback='Not available')}"
+        f"Generated {format_timestamp(metadata['generated_at'], zone)} · "
+        f"Ledger freshness {format_timestamp(metadata.get('data_freshness_at'), zone, fallback='Not available')} · "
+        f"CAISO freshness {format_timestamp(metadata.get('market_updated_at'), zone, fallback='Not available')}"
     )

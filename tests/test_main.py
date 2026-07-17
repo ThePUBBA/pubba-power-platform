@@ -530,6 +530,26 @@ def test_portfolio_assets_endpoint_returns_asset_performance(monkeypatch):
     assert response.json()[0]["average_profit_per_dispatch"] == 575
 
 
+def test_dashboard_summary_endpoint_forwards_options(monkeypatch):
+    import main
+
+    captured = {}
+
+    def build(**kwargs):
+        captured.update(kwargs)
+        return {"kpis": {"today_dispatches": 2}, "status": {"api": "connected"}}
+
+    monkeypatch.setattr(main, "build_dashboard_summary", build)
+    response = TestClient(main.app).get(
+        "/dashboard/summary",
+        params={"timezone": "America/Denver", "include_market": "false"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["kpis"]["today_dispatches"] == 2
+    assert captured == {"timezone_name": "America/Denver", "include_market": False}
+
+
 def test_portfolio_assets_endpoint_identifies_supabase_timeout(monkeypatch):
     import main
 

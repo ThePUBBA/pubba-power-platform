@@ -83,6 +83,30 @@ def test_summary_client_serializes_dates_and_timezone():
     }
 
 
+def test_dashboard_client_uses_live_summary_endpoint_and_validates_contract():
+    payload = {
+        "portfolio": {}, "period": {}, "kpis": {}, "data_quality": {},
+        "series": {}, "status": {}, "metadata": {},
+    }
+    session = Session(Response(payload))
+    client = Only1ApiClient("https://api.example.test", session=session)
+
+    assert client.get_dashboard_summary(timezone_name="America/Denver") == payload
+    method, url, kwargs = session.calls[0]
+    assert method == "get"
+    assert url == "https://api.example.test/dashboard/summary"
+    assert kwargs["params"] == {
+        "include_market": "true", "timezone": "America/Denver",
+    }
+
+    malformed = Only1ApiClient(
+        "https://api.example.test", session=Session(Response({"kpis": {}}))
+    )
+    with pytest.raises(DashboardApiError) as caught:
+        malformed.get_dashboard_summary()
+    assert caught.value.code == "invalid_response"
+
+
 @pytest.mark.parametrize(
     ("error", "code"),
     [(requests.Timeout(), "timeout"), (requests.ConnectionError(), "connection_error")],

@@ -234,7 +234,9 @@ def get_portfolio_summary_records(portfolio: dict) -> tuple[list[dict], list[dic
         "dispatch_events",
         params={
             "select": (
-                "id,status,dispatch_timestamp,discharge_end,updated_at,"
+                "id,dispatch_id,asset_id,status,dispatch_timestamp,charge_start,"
+                "charge_end,discharge_start,discharge_end,updated_at,market,location,"
+                "energy_mwh,"
                 "purchased_energy_mwh,sold_energy_mwh,charging_cost,"
                 "discharge_revenue,net_profit,average_buy_price_per_mwh,"
                 "average_sell_price_per_mwh"

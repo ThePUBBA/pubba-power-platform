@@ -14,6 +14,9 @@ REQUIRED_SUMMARY_SECTIONS = {
     "portfolio", "period", "financial", "period_revenue",
     "operations", "fleet", "metadata",
 }
+REQUIRED_DASHBOARD_SECTIONS = {
+    "portfolio", "period", "kpis", "data_quality", "series", "status", "metadata",
+}
 
 
 def _configured_api_base_url(explicit_url: str | None = None) -> str:
@@ -91,6 +94,25 @@ class Only1ApiClient:
         if not isinstance(payload, dict) or "estimated_net_margin" not in payload:
             raise DashboardApiError(
                 "The backend returned an invalid simulation result.",
+                code="invalid_response",
+            )
+        return payload
+
+    def get_dashboard_summary(
+        self, *, timezone_name: str | None = None, include_market: bool = True
+    ) -> dict:
+        params = {"include_market": str(include_market).lower()}
+        if timezone_name and timezone_name.strip():
+            params["timezone"] = timezone_name.strip()
+        payload = self._request("get", "/dashboard/summary", params=params)
+        if not isinstance(payload, dict) or not REQUIRED_DASHBOARD_SECTIONS.issubset(payload):
+            raise DashboardApiError(
+                "The backend returned invalid executive dashboard data.",
+                code="invalid_response",
+            )
+        if not isinstance(payload["kpis"], dict) or not isinstance(payload["series"], dict):
+            raise DashboardApiError(
+                "The backend returned invalid executive dashboard data.",
                 code="invalid_response",
             )
         return payload

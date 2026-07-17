@@ -33,6 +33,7 @@ from supabase import (
 from caiso import CaisoOasisError, fetch_lmp_data
 from simulation import StorageSimulationError, simulate_storage_profit
 from services.portfolio_summary import PortfolioSummaryError, build_portfolio_summary
+from services.dashboard_summary import build_dashboard_summary
 
 
 SERVICE_NAME = "PUBBA Power API"
@@ -453,6 +454,28 @@ def create_app() -> FastAPI:
     def portfolio_assets():
         try:
             return get_asset_performance()
+        except SupabaseError as exc:
+            _raise_supabase_api_error(exc)
+
+    @app.get(
+        "/dashboard/summary",
+        summary="Get live executive dashboard data",
+        description=(
+            "Aggregates portfolio KPIs, completed dispatch time series, service "
+            "status, and optional live CAISO RTM pricing. Values derived from "
+            "simulation ledger rows are explicitly labeled calculated estimates."
+        ),
+    )
+    def dashboard_summary(
+        timezone_name: Optional[str] = Query(default=None, alias="timezone"),
+        include_market: bool = Query(default=True),
+    ):
+        try:
+            return build_dashboard_summary(
+                timezone_name=timezone_name, include_market=include_market
+            )
+        except PortfolioSummaryError as exc:
+            raise ApiError(400, exc.code, str(exc), field=exc.field) from exc
         except SupabaseError as exc:
             _raise_supabase_api_error(exc)
 

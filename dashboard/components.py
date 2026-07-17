@@ -318,6 +318,26 @@ def install_console_theme(st) -> None:
             border-radius: var(--pubba-radius);
             padding: .65rem;
         }
+        .pubba-status-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: .75rem;
+        }
+        .pubba-status-item {
+            background: var(--pubba-card);
+            border: 1px solid var(--pubba-border);
+            border-radius: 12px;
+            padding: .85rem 1rem;
+        }
+        .pubba-status-name {
+            color: var(--pubba-muted);
+            font-family: var(--font-display);
+            letter-spacing: .04em;
+            text-transform: uppercase;
+        }
+        .pubba-status-value { color: var(--pubba-text); margin-top: .35rem; }
+        .pubba-status-value::before { content: "●"; color: var(--pubba-danger); margin-right: .45rem; }
+        .pubba-status-value.is-good::before { color: var(--pubba-accent); }
         hr { border-color: var(--pubba-border) !important; }
         small, .stCaption, [data-testid="stCaptionContainer"] {
             color: var(--pubba-muted) !important;
@@ -335,6 +355,7 @@ def install_console_theme(st) -> None:
             .block-container { padding: 2rem 1rem 3rem; }
             .pubba-page-header { align-items: flex-start; flex-direction: column; }
             .pubba-kpi { min-height: 104px; }
+            .pubba-status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         }
         </style>
         """,
@@ -414,3 +435,14 @@ def render_data_freshness(st, value: str) -> None:
         f'<span class="pubba-meta">Data freshness · {escape(value)}</span>',
         unsafe_allow_html=True,
     )
+
+
+def render_system_status(st, statuses: list[tuple[str, str, bool]]) -> None:
+    items = "".join(
+        '<div class="pubba-status-item">'
+        f'<div class="pubba-status-name">{escape(name)}</div>'
+        f'<div class="pubba-status-value{" is-good" if healthy else ""}">'
+        f'{escape(value)}</div></div>'
+        for name, value, healthy in statuses
+    )
+    st.markdown(f'<div class="pubba-status-grid">{items}</div>', unsafe_allow_html=True)
