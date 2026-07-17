@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import datetime, time, timedelta
+from zoneinfo import ZoneInfo
+
 import plotly.graph_objects as go
 
 from dashboard.charts import GRAY, MINT, WHITE, style_chart, trend_figure
@@ -31,6 +34,16 @@ from dashboard.refresh import refresh_dashboard_data
 def _tone(value: object) -> str:
     number = as_decimal(value)
     return "positive" if number > 0 else "negative" if number < 0 else "neutral"
+
+
+def _market_day_axis(prices: list[dict], zone: str) -> tuple[list[str], list[str]]:
+    """Return the full local trading-day range and two-hour tick positions."""
+    latest = datetime.fromisoformat(str(prices[-1]["timestamp"]).replace("Z", "+00:00"))
+    local_day = latest.astimezone(ZoneInfo(zone)).date()
+    start = datetime.combine(local_day, time.min, tzinfo=ZoneInfo(zone))
+    end = start + timedelta(days=1)
+    ticks = [(start + timedelta(hours=hour)).isoformat() for hour in range(0, 24, 2)]
+    return [start.isoformat(), end.isoformat()], ticks
 
 
 def _cards(st, cards: list[dict]) -> None:
@@ -66,10 +79,7 @@ def _market_section(st, data: dict, currency: str, zone: str) -> None:
         return
     values = [point["price_per_mwh"] for point in prices]
     market_times = [format_timestamp(point["timestamp"], zone) for point in prices]
-    tick_step = max(1, len(prices) // 8)
-    tick_values = [point["timestamp"] for point in prices[::tick_step]]
-    if prices[-1]["timestamp"] not in tick_values:
-        tick_values.append(prices[-1]["timestamp"])
+    day_range, tick_values = _market_day_axis(prices, zone)
     fig = go.Figure(go.Scatter(
         x=[point["timestamp"] for point in prices], y=values,
         customdata=market_times,
@@ -84,6 +94,7 @@ def _market_section(st, data: dict, currency: str, zone: str) -> None:
         ticktext=[format_chart_time_tick(value, zone) for value in tick_values],
         tickangle=0,
         automargin=True,
+        range=day_range,
     )
     fig.add_hline(y=current, line_dash="dot", line_color=GRAY)
     fig = style_chart(

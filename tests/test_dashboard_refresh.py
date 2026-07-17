@@ -1,5 +1,6 @@
 from dashboard.api_client import DashboardApiError
 from dashboard.charts import trend_figure
+from dashboard.pages.overview import _market_day_axis
 from dashboard.refresh import STATE_KEY, refresh_dashboard_data
 
 
@@ -50,3 +51,18 @@ def test_single_point_trend_uses_categorical_axis():
     assert figure.layout.yaxis.tickformat == ",.2f"
     assert figure.data[0].mode == "markers"
     assert list(figure.data[0].x) == ["2026-07-17"]
+
+
+def test_market_axis_covers_entire_local_day_with_two_hour_ticks():
+    day_range, ticks = _market_day_axis(
+        [{"timestamp": "2026-07-17T15:45:00-07:00"}],
+        "America/Los_Angeles",
+    )
+
+    assert day_range == [
+        "2026-07-17T00:00:00-07:00",
+        "2026-07-18T00:00:00-07:00",
+    ]
+    assert len(ticks) == 12
+    assert ticks[0] == "2026-07-17T00:00:00-07:00"
+    assert ticks[-1] == "2026-07-17T22:00:00-07:00"
