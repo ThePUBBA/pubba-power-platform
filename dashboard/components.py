@@ -569,7 +569,7 @@ def render_refresh_countdown(st, seconds: int = 60) -> None:
           </body>
         </html>
         """,
-        height="content",
+        height=28,
         tab_index=-1,
     )
 
