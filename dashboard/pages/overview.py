@@ -108,18 +108,18 @@ def _market_section(st, data: dict, currency: str, zone: str) -> None:
         ticklabelstandoff=14,
         automargin=True,
         range=day_range,
-        showline=True,
-        linecolor=GRID,
-        linewidth=1,
     )
     upper_price = max(values)
     upper_axis = max(20, (floor(upper_price / 10) + 1) * 10)
     fig.update_yaxes(
-        range=[10, upper_axis],
+        range=[9, upper_axis + 1],
+        tick0=10,
         dtick=10,
         tickprefix="$",
         tickformat=",.0f",
     )
+    fig.add_hline(y=10, line_color=GRID, line_width=1, layer="below")
+    fig.add_hline(y=upper_axis, line_color=GRID, line_width=1, layer="below")
     fig.add_hline(y=current, line_dash="dot", line_color=GRAY)
     fig.add_annotation(
         x=latest_timestamp,
