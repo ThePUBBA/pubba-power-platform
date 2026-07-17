@@ -10,7 +10,7 @@ from dashboard.components import (
     render_page_header,
     render_section_header,
 )
-from dashboard.formatting import as_decimal, format_currency, format_energy
+from dashboard.formatting import as_decimal, format_currency, format_energy, format_timestamp
 
 
 def render(st, client: Only1ApiClient) -> None:
@@ -87,9 +87,11 @@ def render(st, client: Only1ApiClient) -> None:
         render_section_header(st, "Historical Market Windows")
         fig = go.Figure()
         if charge_points:
-            fig.add_trace(go.Scatter(x=[p["timestamp"] for p in charge_points], y=[p["price"] for p in charge_points], name="Charge window", line={"color": GRAY, "width": 3}, hovertemplate="%{x}<br>$%{y:,.2f}/MWh<extra></extra>"))
+            charge_times = [format_timestamp(p["timestamp"], "America/Los_Angeles") for p in charge_points]
+            fig.add_trace(go.Scatter(x=[p["timestamp"] for p in charge_points], y=[p["price"] for p in charge_points], customdata=charge_times, name="Charge window", line={"color": GRAY, "width": 3}, hovertemplate="%{customdata}<br>$%{y:,.2f}/MWh<extra></extra>"))
         if discharge_points:
-            fig.add_trace(go.Scatter(x=[p["timestamp"] for p in discharge_points], y=[p["price"] for p in discharge_points], name="Discharge window", line={"color": MINT, "width": 3}, hovertemplate="%{x}<br>$%{y:,.2f}/MWh<extra></extra>"))
+            discharge_times = [format_timestamp(p["timestamp"], "America/Los_Angeles") for p in discharge_points]
+            fig.add_trace(go.Scatter(x=[p["timestamp"] for p in discharge_points], y=[p["price"] for p in discharge_points], customdata=discharge_times, name="Discharge window", line={"color": MINT, "width": 3}, hovertemplate="%{customdata}<br>$%{y:,.2f}/MWh<extra></extra>"))
         st.plotly_chart(style_chart(fig, title="Historical charge and discharge windows", subtitle=f"{market} · {location} · {simulation_date.isoformat()}", y_title="USD/MWh"), width="stretch")
 
     with st.expander("Simulation assumptions and classification"):

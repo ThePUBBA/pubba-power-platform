@@ -65,8 +65,9 @@ def _market_section(st, data: dict, currency: str, zone: str) -> None:
     values = [point["price_per_mwh"] for point in prices]
     fig = go.Figure(go.Scatter(
         x=[point["timestamp"] for point in prices], y=values,
+        customdata=[format_timestamp(point["timestamp"], zone) for point in prices],
         line={"color": MINT, "width": 3}, name="CAISO RTM LMP",
-        hovertemplate="%{x|%b %d, %H:%M}<br>$%{y:,.2f}/MWh<extra></extra>",
+        hovertemplate="%{customdata}<br>$%{y:,.2f}/MWh<extra></extra>",
     ))
     current = values[-1]
     fig.add_hline(y=current, line_dash="dot", line_color=GRAY, annotation_text=f"Current ${current:,.2f}")
@@ -189,7 +190,7 @@ def _render_live(st, client) -> None:
         {"label": "Today's Dispatches", "value": f'{kpis["today_dispatches"]:,}', "subtitle": f"Reporting timezone · {zone}", "icon": "↔"},
         {"label": "Battery State of Charge", "value": "Not available", "subtitle": "Requires telemetry integration", "icon": "▤"},
         {"label": "Current Market Price", "value": "Not available" if kpis["current_market_price_per_mwh"] is None else f'{format_currency(kpis["current_market_price_per_mwh"], currency)}/MWh', "subtitle": f'{metadata.get("market_type", "RTM")} · {metadata.get("market_location")}', "icon": "⌁"},
-        {"label": "Last API Sync", "value": format_timestamp(kpis["last_api_sync_at"], zone), "subtitle": f"Request latency · {payload['latency_ms']:.0f} ms", "icon": "◷", "tone": "positive"},
+        {"label": "Last API Sync", "value": format_timestamp(kpis["last_api_sync_at"], zone), "subtitle": f"Request latency · {payload['latency_ms']:.0f} ms", "icon": "◷", "tone": "neutral"},
     ])
 
     render_section_header(st, "System Health")

@@ -182,9 +182,9 @@ def test_decimal_safe_value_formatting():
 
 def test_timestamp_formatting_converts_reporting_timezone_and_handles_null():
     assert format_timestamp(None, "America/Los_Angeles") == "Not available"
-    assert "PDT" in format_timestamp(
+    assert format_timestamp(
         "2026-07-15T18:00:00Z", "America/Los_Angeles"
-    )
+    ) == "Jul 15, 2026 · 11:00 AM PDT"
 
 
 def test_dispatch_timestamp_is_compact_and_omits_seconds():

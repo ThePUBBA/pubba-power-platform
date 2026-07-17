@@ -54,9 +54,9 @@ def format_timestamp(
         return fallback
     try:
         parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-        return parsed.astimezone(ZoneInfo(timezone_name)).strftime(
-            "%b %d, %Y %I:%M:%S %p %Z"
-        )
+        local = parsed.astimezone(ZoneInfo(timezone_name))
+        hour = local.strftime("%I").lstrip("0") or "12"
+        return f'{local.strftime("%b %d, %Y")} · {hour}{local.strftime(":%M %p %Z")}'
     except (ValueError, TypeError):
         return fallback
 
@@ -67,13 +67,5 @@ def format_dispatch_timestamp(
     *,
     fallback: str = "Not available",
 ) -> str:
-    """Format a dispatch time compactly without noisy seconds or fractional ticks."""
-    if not value:
-        return fallback
-    try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-        local = parsed.astimezone(ZoneInfo(timezone_name))
-        hour = local.strftime("%I").lstrip("0") or "12"
-        return f'{local.strftime("%b %d, %Y")} · {hour}{local.strftime(":%M %p %Z")}'
-    except (ValueError, TypeError):
-        return fallback
+    """Compatibility wrapper for the dashboard's standard timestamp format."""
+    return format_timestamp(value, timezone_name, fallback=fallback)

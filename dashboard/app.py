@@ -10,6 +10,7 @@ from dashboard.components import (
     render_sidebar_brand,
 )
 from dashboard.pages import overview, simulations
+from dashboard.formatting import format_timestamp
 from dashboard.refresh import STATE_KEY
 
 
@@ -52,7 +53,7 @@ def main() -> None:
     st.sidebar.divider()
     refreshed = cached.get("refreshed_at")
     if refreshed:
-        st.sidebar.caption(f"Last refresh · {refreshed[:19].replace('T', ' ')} UTC")
+        st.sidebar.caption(f"Last refresh · {format_timestamp(refreshed, 'UTC')}")
     st.sidebar.caption("© 2026 PUBBA Power  ·  v1.0.0")
 
 
