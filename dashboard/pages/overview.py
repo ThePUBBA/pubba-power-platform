@@ -10,6 +10,7 @@ from dashboard.components import (
     render_empty_state,
     render_error_state,
     render_kpi_card,
+    render_page_header,
     render_section_header,
 )
 from dashboard.formatting import (
@@ -38,9 +39,13 @@ def _cards(st, cards: list[tuple[str, str, str]], columns: int = 3) -> None:
 
 
 def render(st, client: Only1ApiClient) -> None:
-    title, refresh = st.columns([5, 1])
-    with title:
-        st.title("Portfolio Overview")
+    render_page_header(
+        st,
+        "Portfolio Overview",
+        "Authoritative financial, operational, and fleet intelligence across the portfolio.",
+        badge="Live portfolio",
+    )
+    _, refresh = st.columns([5, 1])
     with refresh:
         st.button("Refresh", type="primary", use_container_width=True)
 
@@ -95,10 +100,11 @@ def render(st, client: Only1ApiClient) -> None:
     currency = portfolio["currency_code"]
     market = portfolio["default_market"]
 
-    st.caption(
+    st.markdown(
         f"{portfolio['name']}  ·  Market: {market}  ·  "
         f"Reporting timezone: {reporting_timezone}  ·  "
-        f"Last refresh: {format_timestamp(metadata['generated_at'], reporting_timezone)}"
+        f"Last refresh: {format_timestamp(metadata['generated_at'], reporting_timezone)}",
+        unsafe_allow_html=False,
     )
     render_data_freshness(
         st,

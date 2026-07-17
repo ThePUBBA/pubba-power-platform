@@ -1,12 +1,22 @@
 """Existing storage simulation workflow presented through FastAPI."""
 
 from dashboard.api_client import DashboardApiError, Only1ApiClient
-from dashboard.formatting import format_currency, format_energy
+from dashboard.components import (
+    render_kpi_card,
+    render_page_header,
+    render_section_header,
+)
+from dashboard.formatting import as_decimal, format_currency, format_energy
 
 
 def render(st, client: Only1ApiClient) -> None:
-    st.title("Simulations")
-    st.caption("Run the existing historical CAISO storage simulation workflow.")
+    render_page_header(
+        st,
+        "Storage Simulations",
+        "Evaluate historical CAISO storage economics using the existing portfolio workflow.",
+        badge="Historical analysis",
+    )
+    render_section_header(st, "Simulation parameters")
     with st.form("simulation"):
         left, right = st.columns(2)
         with left:
@@ -47,11 +57,27 @@ def render(st, client: Only1ApiClient) -> None:
         st.error(f"Simulation unavailable — {exc}")
         return
 
+    render_section_header(st, "Simulation results")
     net, revenue, energy = st.columns(3)
-    net.metric("Estimated Net Margin", format_currency(result["estimated_net_margin"]))
-    revenue.metric("Discharge Revenue", format_currency(result["discharge_revenue"]))
-    energy.metric("Discharged Energy", format_energy(result["discharged_energy_mwh"]))
+    with net:
+        render_kpi_card(
+            st,
+            "Estimated Net Margin",
+            format_currency(result["estimated_net_margin"]),
+            tone=(
+                "positive"
+                if as_decimal(result["estimated_net_margin"]) > 0
+                else "negative"
+            ),
+        )
+    with revenue:
+        render_kpi_card(
+            st, "Discharge Revenue", format_currency(result["discharge_revenue"])
+        )
+    with energy:
+        render_kpi_card(
+            st, "Discharged Energy", format_energy(result["discharged_energy_mwh"])
+        )
     persistence = result.get("persistence") or {}
     if persistence:
         st.caption(f"Persistence: {persistence.get('message', 'Status unavailable')}")
-
