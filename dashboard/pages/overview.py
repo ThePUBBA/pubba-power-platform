@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 import plotly.graph_objects as go
 
-from dashboard.charts import GRAY, MINT, WHITE, style_chart, trend_figure
+from dashboard.charts import GRAY, GRID, MINT, WHITE, style_chart, trend_figure
 from dashboard.components import (
     render_capabilities,
     render_data_freshness,
@@ -105,8 +105,12 @@ def _market_section(st, data: dict, currency: str, zone: str) -> None:
         tickvals=tick_values,
         ticktext=[format_chart_time_tick(value, zone) for value in tick_values],
         tickangle=0,
+        ticklabelstandoff=14,
         automargin=True,
         range=day_range,
+        showline=True,
+        linecolor=GRID,
+        linewidth=1,
     )
     upper_price = max(values)
     upper_axis = max(20, (floor(upper_price / 10) + 1) * 10)
