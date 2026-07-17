@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from urllib.parse import quote
-
 import plotly.graph_objects as go
 
 from dashboard.charts import GRAY, MINT, WHITE, style_chart, trend_figure
@@ -13,10 +11,18 @@ from dashboard.components import (
     render_error_state,
     render_kpi_card,
     render_page_header,
+    render_refresh_countdown,
     render_section_header,
     render_system_status,
 )
-from dashboard.formatting import as_decimal, format_currency, format_energy, format_power, format_timestamp
+from dashboard.formatting import (
+    as_decimal,
+    format_currency,
+    format_dispatch_timestamp,
+    format_energy,
+    format_power,
+    format_timestamp,
+)
 from dashboard.refresh import refresh_dashboard_data
 
 
@@ -31,12 +37,6 @@ def _cards(st, cards: list[dict]) -> None:
         for column, card in zip(columns, cards[start:start + 3]):
             with column:
                 render_kpi_card(st, **card)
-
-
-def _countdown(st) -> None:
-    html = """<div style="font:12px Inter,Arial;color:#A7A7A7;text-align:right">Next refresh in <b id="pubba-count" style="color:#44FFBB">60s</b></div>
-    <script>let n=60,e=document.getElementById('pubba-count');setInterval(()=>{n=n<=1?60:n-1;e.textContent=n+'s'},1000)</script>"""
-    st.iframe(f"data:text/html;charset=utf-8,{quote(html)}", height=24)
 
 
 def _market_section(st, data: dict, currency: str, zone: str) -> None:
@@ -90,10 +90,10 @@ def _performance_section(st, data: dict, currency: str) -> None:
     note = "Single reporting date; additional dispatch history will create a trend." if one_point else "Completed dispatch ledger by reporting date."
     with left:
         fig = trend_figure(daily, "revenue", name="Revenue", color=MINT, currency=True)
-        st.plotly_chart(style_chart(fig, title="Revenue over time", subtitle=note, y_title=currency), width="stretch")
+        st.plotly_chart(style_chart(fig, title="Revenue over time", subtitle=note, y_title=f"{currency} ($)"), width="stretch")
     with right:
         fig = trend_figure(daily, "profit", name="Profit", color=WHITE, currency=True)
-        st.plotly_chart(style_chart(fig, title="Profit over time", subtitle=note, y_title=currency), width="stretch")
+        st.plotly_chart(style_chart(fig, title="Profit over time", subtitle=note, y_title=f"{currency} ($)"), width="stretch")
     fig = go.Figure(go.Bar(
         x=[row["date"] for row in daily], y=[row["throughput_mwh"] for row in daily],
         marker_color=MINT, name="Throughput", hovertemplate="%{x}<br>%{y:,.2f} MWh<extra></extra>",
@@ -109,15 +109,17 @@ def _dispatch_section(st, data: dict, currency: str, zone: str) -> None:
     if not dispatches:
         st.info("No completed operational or simulation-derived dispatch records are available.")
         return
+    display_times = [format_dispatch_timestamp(row.get("timestamp"), zone) for row in dispatches]
     fig = go.Figure(go.Scatter(
-        x=[row["timestamp"] for row in dispatches], y=[row["discharge_energy_mwh"] for row in dispatches],
+        x=display_times, y=[row["discharge_energy_mwh"] for row in dispatches],
         mode="markers", marker={"color": MINT, "size": 11}, name="Dispatch",
-        customdata=[[row.get("asset_id"), row.get("profit"), row.get("data_quality")] for row in dispatches],
-        hovertemplate="%{x|%b %d, %Y %H:%M}<br>%{y:,.2f} MWh<br>Asset %{customdata[0]}<br>Profit $%{customdata[1]:,.2f}<br>%{customdata[2]}<extra></extra>",
+        customdata=[[display_time, row.get("asset_id"), row.get("profit"), row.get("data_quality")] for display_time, row in zip(display_times, dispatches)],
+        hovertemplate="%{customdata[0]}<br>%{y:,.2f} MWh<br>Asset %{customdata[1]}<br>Profit $%{customdata[2]:,.2f}<br>%{customdata[3]}<extra></extra>",
     ))
+    fig.update_xaxes(type="category")
     st.plotly_chart(style_chart(fig, title="Dispatch timeline", subtitle="Completed ledger events; simulated records remain explicitly classified.", y_title="Discharged MWh"), width="stretch")
     rows = [{
-        "Time": format_timestamp(row.get("timestamp"), zone),
+        "Time": format_dispatch_timestamp(row.get("timestamp"), zone),
         "Asset": row.get("asset_id") or "Unassigned",
         "Charge MWh": float(row.get("charge_energy_mwh") or 0),
         "Discharge MWh": float(row.get("discharge_energy_mwh") or 0),
@@ -159,7 +161,7 @@ def _render_live(st, client) -> None:
     with action:
         st.write("")
         st.button("Refresh", type="primary", width="stretch", help="Request fresh API, Supabase, and CAISO data now.")
-    _countdown(st)
+    render_refresh_countdown(st)
     with st.spinner("Refreshing live operations data…"):
         payload, error = refresh_dashboard_data(st.session_state, client, timezone_name=timezone_name or None)
     if error:

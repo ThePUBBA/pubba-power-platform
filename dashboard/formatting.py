@@ -60,3 +60,20 @@ def format_timestamp(
     except (ValueError, TypeError):
         return fallback
 
+
+def format_dispatch_timestamp(
+    value: object,
+    timezone_name: str,
+    *,
+    fallback: str = "Not available",
+) -> str:
+    """Format a dispatch time compactly without noisy seconds or fractional ticks."""
+    if not value:
+        return fallback
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        local = parsed.astimezone(ZoneInfo(timezone_name))
+        hour = local.strftime("%I").lstrip("0") or "12"
+        return f'{local.strftime("%b %d, %Y")} · {hour}{local.strftime(":%M %p %Z")}'
+    except (ValueError, TypeError):
+        return fallback

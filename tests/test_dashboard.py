@@ -7,6 +7,7 @@ import requests
 from dashboard.api_client import DashboardApiError, Only1ApiClient
 from dashboard.formatting import (
     format_currency,
+    format_dispatch_timestamp,
     format_energy,
     format_power,
     format_spread,
@@ -184,6 +185,13 @@ def test_timestamp_formatting_converts_reporting_timezone_and_handles_null():
     assert "PDT" in format_timestamp(
         "2026-07-15T18:00:00Z", "America/Los_Angeles"
     )
+
+
+def test_dispatch_timestamp_is_compact_and_omits_seconds():
+    assert format_dispatch_timestamp(
+        "2026-07-11T14:30:00Z", "America/Los_Angeles"
+    ) == "Jul 11, 2026 · 7:30 AM PDT"
+    assert format_dispatch_timestamp(None, "America/Los_Angeles") == "Not available"
 
 
 def test_custom_range_is_timezone_aware_and_validated():

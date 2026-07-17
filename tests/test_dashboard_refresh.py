@@ -46,4 +46,6 @@ def test_single_point_trend_uses_categorical_axis():
     )
 
     assert figure.layout.xaxis.type == "category"
+    assert figure.layout.yaxis.tickprefix == "$"
+    assert figure.layout.yaxis.tickformat == ",.2f"
     assert figure.data[0].mode == "markers"

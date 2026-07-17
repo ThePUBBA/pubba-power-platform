@@ -49,6 +49,8 @@ def trend_figure(rows: list[dict], field: str, *, name: str, color: str, currenc
         hovertemplate=("%{x}<br>$%{y:,.2f}<extra></extra>" if currency else "%{x}<br>%{y:,.2f}<extra></extra>"),
     )
     fig = go.Figure(trace)
+    if currency:
+        fig.update_yaxes(tickprefix="$", tickformat=",.2f", separatethousands=True)
     if categorical:
         fig.update_xaxes(type="category")
     return fig

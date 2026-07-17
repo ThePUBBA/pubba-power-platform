@@ -4,7 +4,12 @@ import plotly.graph_objects as go
 
 from dashboard.api_client import DashboardApiError, Only1ApiClient
 from dashboard.charts import GRAY, MINT, style_chart
-from dashboard.components import render_kpi_card, render_page_header, render_section_header
+from dashboard.components import (
+    render_kpi_card,
+    render_notice,
+    render_page_header,
+    render_section_header,
+)
 from dashboard.formatting import as_decimal, format_currency, format_energy
 
 
@@ -14,7 +19,11 @@ def render(st, client: Only1ApiClient) -> None:
         "Evaluate calculated storage economics against historical CAISO market prices.",
         badge="Calculated analysis", environment="Production",
     )
-    st.info("Simulation outputs are calculated estimates based on historical market data—not executed operational dispatches.")
+    render_notice(
+        st,
+        "Simulation outputs are calculated estimates based on historical market "
+        "data—not executed operational dispatches.",
+    )
     render_section_header(st, "Simulation Parameters")
     with st.form("simulation"):
         market_col, asset_col = st.columns(2)

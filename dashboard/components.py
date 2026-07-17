@@ -217,6 +217,7 @@ def install_console_theme(st) -> None:
             border-radius: var(--pubba-radius);
             padding: 1.1rem 1.15rem;
             min-height: 150px;
+            margin-bottom: .9rem;
             box-shadow: 0 12px 32px rgba(0, 0, 0, .2);
             transition: border-color .18s ease, transform .18s ease;
         }
@@ -251,6 +252,28 @@ def install_console_theme(st) -> None:
         .pubba-meta {
             color: var(--pubba-muted);
             font-size: .78rem;
+        }
+        .pubba-notice {
+            display: flex;
+            align-items: center;
+            gap: .7rem;
+            color: var(--pubba-text);
+            background: var(--pubba-card);
+            border: 1px solid var(--pubba-border);
+            border-left: 3px solid var(--pubba-accent);
+            border-radius: 12px;
+            padding: .9rem 1rem;
+            font-family: var(--font-body);
+            font-size: .9rem;
+            line-height: 1.5;
+        }
+        .pubba-notice-dot {
+            width: 7px;
+            height: 7px;
+            flex: 0 0 7px;
+            border-radius: 50%;
+            background: var(--pubba-accent);
+            box-shadow: 0 0 10px rgba(68, 255, 187, .35);
         }
 
         [data-testid="stForm"] {
@@ -458,6 +481,53 @@ def render_data_freshness(st, value: str) -> None:
     st.markdown(
         f'<span class="pubba-meta">Data freshness · {escape(value)}</span>',
         unsafe_allow_html=True,
+    )
+
+
+def render_notice(st, message: str) -> None:
+    st.markdown(
+        '<div class="pubba-notice"><span class="pubba-notice-dot"></span>'
+        f'<span>{escape(message)}</span></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_refresh_countdown(st, seconds: int = 60) -> None:
+    safe_seconds = max(1, int(seconds))
+    st.iframe(
+        f"""
+        <!doctype html>
+        <html>
+          <head>
+            <style>
+              html, body {{
+                margin: 0;
+                padding: 0;
+                overflow: hidden;
+                background: transparent;
+                color: #A7A7A7;
+                font-family: Inter, Arial, Helvetica, sans-serif;
+                font-size: 12px;
+              }}
+              body {{ text-align: right; line-height: 22px; }}
+              strong {{ color: #44FFBB; font-weight: 700; }}
+            </style>
+          </head>
+          <body>
+            Next refresh in <strong id="pubba-count">{safe_seconds}s</strong>
+            <script>
+              let remaining = {safe_seconds};
+              const counter = document.getElementById("pubba-count");
+              window.setInterval(() => {{
+                remaining = remaining <= 1 ? {safe_seconds} : remaining - 1;
+                counter.textContent = `${{remaining}}s`;
+              }}, 1000);
+            </script>
+          </body>
+        </html>
+        """,
+        height="content",
+        tab_index=-1,
     )
 
 
