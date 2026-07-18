@@ -367,6 +367,21 @@ def get_simulation_result(simulation_id: str) -> dict | None:
     return records[0] if records else None
 
 
+def list_simulation_results(
+    *, portfolio_id: str | None = None, asset_id: str | None = None,
+    limit: int = 100, offset: int = 0,
+) -> list[dict]:
+    params: dict[str, object] = {
+        "select": "*", "order": "created_at.desc,id.desc",
+        "limit": limit, "offset": offset,
+    }
+    if portfolio_id:
+        params["portfolio_id"] = f"eq.{portfolio_id}"
+    if asset_id:
+        params["asset_id"] = f"eq.{asset_id}"
+    return _request("get", "simulation_results", params=params)
+
+
 def get_dispatch_event_record(dispatch_record_id: str) -> dict | None:
     records = _request(
         "get", "dispatch_events",

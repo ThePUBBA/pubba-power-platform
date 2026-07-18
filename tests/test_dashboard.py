@@ -1,5 +1,6 @@
 from datetime import date, datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 import requests
@@ -154,6 +155,58 @@ def test_recommendation_history_client_handles_empty_and_detail_contracts():
     assert analytics_client.get_recommendation_history_analytics() == analytics
 
 
+def test_recommendation_write_client_is_explicit_and_server_side(monkeypatch):
+    monkeypatch.delenv("RECOMMENDATION_WRITE_TOKEN", raising=False)
+    disabled = Only1ApiClient("https://api.example.test", session=Session())
+    assert disabled.recommendation_writes_configured is False
+    with pytest.raises(DashboardApiError, match="not enabled") as caught:
+        disabled.capture_recommendation("BAT-001")
+    assert caught.value.code == "recommendation_writes_disabled"
+
+    session = Session(Response({"capture_status": "captured", "recommendation": {"id": "history-1"}}))
+    client = Only1ApiClient(
+        "https://api.example.test", session=session,
+        recommendation_write_token="server-only-secret",
+    )
+    result = client.capture_recommendation("BAT-001")
+    assert result["capture_status"] == "captured"
+    method, url, kwargs = session.calls[0]
+    assert method == "post"
+    assert url.endswith("/recommendations/BAT-001/capture")
+    assert kwargs["headers"] == {"X-Recommendation-Key": "server-only-secret"}
+
+
+@pytest.mark.parametrize("action", ["acknowledge", "simulation", "dispatch"])
+def test_recommendation_actions_submit_stable_ids(action):
+    session = Session(Response({"id": "history-1"}))
+    client = Only1ApiClient(
+        "https://api.example.test", session=session,
+        recommendation_write_token="secret",
+    )
+    if action == "acknowledge":
+        client.acknowledge_recommendation("history-1", "Reviewed")
+        assert session.calls[0][2]["json"] == {"note": "Reviewed"}
+    elif action == "simulation":
+        client.link_recommendation_simulation("history-1", "simulation-uuid")
+        assert session.calls[0][2]["json"] == {"record_id": "simulation-uuid"}
+    else:
+        client.link_recommendation_dispatch("history-1", "dispatch-uuid")
+        assert session.calls[0][2]["json"] == {"record_id": "dispatch-uuid"}
+
+
+def test_recommendation_candidate_clients_are_api_backed():
+    simulation_session = Session(Response([{"id": "simulation-uuid"}]))
+    simulation_client = Only1ApiClient("https://api.example.test", session=simulation_session)
+    assert simulation_client.get_simulations(asset_id="BAT-001") == [{"id": "simulation-uuid"}]
+    assert simulation_session.calls[0][1].endswith("/simulations")
+    assert simulation_session.calls[0][2]["params"]["asset_id"] == "BAT-001"
+
+    dispatch_session = Session(Response([{"id": "dispatch-uuid"}]))
+    dispatch_client = Only1ApiClient("https://api.example.test", session=dispatch_session)
+    assert dispatch_client.get_dispatch_events(asset_id="BAT-001") == [{"id": "dispatch-uuid"}]
+    assert dispatch_session.calls[0][1].endswith("/dispatch-events")
+
+
 @pytest.mark.parametrize(
     ("error", "code"),
     [(requests.Timeout(), "timeout"), (requests.ConnectionError(), "connection_error")],
@@ -305,6 +358,19 @@ def test_dashboard_module_import_does_not_make_network_call(monkeypatch):
     assert callable(dashboard.app.main)
 
 
+def test_operator_workflow_has_no_direct_supabase_or_automatic_actions():
+    dashboard_files = list(Path("dashboard").rglob("*.py"))
+    source = "\n".join(path.read_text() for path in dashboard_files)
+    assert "from supabase import" not in source
+    assert "import supabase" not in source
+    overview = Path("dashboard/pages/overview.py").read_text()
+    history = Path("dashboard/pages/recommendation_history.py").read_text()
+    assert overview.index("client.capture_recommendation") > overview.index("Confirm Capture")
+    assert history.index("client.link_recommendation_simulation") > history.index("Link Existing Simulation")
+    assert history.index("client.link_recommendation_dispatch") > history.index("Link Existing Dispatch")
+    assert "autonomous" not in overview.lower()
+
+
 def test_recommendation_history_page_renders_empty_state(monkeypatch):
     from dashboard.pages import recommendation_history
 
@@ -318,13 +384,20 @@ def test_recommendation_history_page_renders_empty_state(monkeypatch):
         def caption(self, value): self.captions.append(value)
         def info(self, value): self.infos.append(value)
         def warning(self, value): raise AssertionError(value)
+        def columns(self, count): return [self] * count
+        def __enter__(self): return self
+        def __exit__(self, *args): return None
+        def selectbox(self, label, options, **kwargs): return options[0]
+        def number_input(self, *args, **kwargs): return kwargs.get("value", 0)
+        def checkbox(self, *args, **kwargs): return False
 
     class Client:
+        def get_portfolio_assets(self): return []
         def get_recommendation_history(self, **kwargs): return []
         def get_recommendation_history_analytics(self):
             return {"sample_size": 0, "accuracy_message": "Insufficient history"}
 
     st = St()
     recommendation_history.render(st, Client())
-    assert st.infos == ["No recommendations have been explicitly captured."]
+    assert st.infos == ["No recommendations have been explicitly captured for these filters."]
     assert "Insufficient history" in st.captions

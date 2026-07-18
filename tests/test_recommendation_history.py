@@ -249,6 +249,40 @@ def test_history_retrieval_empty_and_unknown_id(monkeypatch):
     assert client.get(f"/recommendations/history/{RECOMMENDATION_ID}").status_code == 404
 
 
+def test_history_outcome_filter_is_api_backed(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        main, "list_recommendation_history",
+        lambda **kwargs: captured.update(kwargs) or [],
+    )
+    response = TestClient(main.app).get(
+        "/recommendations/history?outcome_status=simulation_only"
+    )
+    assert response.status_code == 200
+    assert captured["linked_simulation"] is True
+    assert captured["linked_dispatch"] is False
+    invalid = TestClient(main.app).get(
+        "/recommendations/history?outcome_status=unknown"
+    )
+    assert invalid.status_code == 400
+
+
+def test_simulation_candidates_use_default_portfolio_and_asset(monkeypatch):
+    monkeypatch.setattr(main, "get_default_portfolio", lambda: {"id": PORTFOLIO_ID})
+    captured = {}
+    monkeypatch.setattr(
+        main, "list_simulation_results",
+        lambda **kwargs: captured.update(kwargs) or [{"id": SIMULATION_ID}],
+    )
+    response = TestClient(main.app).get("/simulations?asset_id=BAT-1&limit=25")
+    assert response.status_code == 200
+    assert response.json()[0]["id"] == SIMULATION_ID
+    assert captured == {
+        "portfolio_id": PORTFOLIO_ID, "asset_id": "BAT-1",
+        "limit": 25, "offset": 0,
+    }
+
+
 def test_simulation_link_is_explicit_and_validated(monkeypatch):
     configure_history_links(monkeypatch)
     client = TestClient(main.app)

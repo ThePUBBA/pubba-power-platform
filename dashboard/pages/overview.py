@@ -553,7 +553,20 @@ def _assets_section(st, payload: dict, currency: str, zone: str, client) -> None
         st.caption("Telemetry history is not available; latest asset observations remain visible.")
 
 
-def _opportunities_section(st, payload: dict, currency: str) -> None:
+def _capture_summary(item: dict, currency: str) -> list[tuple[str, str]]:
+    economics = item.get("estimated_economics") or {}
+    readiness = item.get("operational_readiness") or {}
+    return [
+        ("Asset", str(item.get("asset_name") or item.get("asset_id") or "Not available")),
+        ("Recommendation", str(item.get("recommendation") or "Not available")),
+        ("Opportunity score", f'{item.get("opportunity_score", 0)}/100'),
+        ("Market price", f'{format_currency(item.get("market_price_per_mwh"), currency)}/MWh'),
+        ("Estimated profit", format_currency(economics.get("estimated_gross_profit"), currency) if economics else "Not available"),
+        ("Operational readiness", str(readiness.get("explanation") or "Not available")),
+    ]
+
+
+def _opportunities_section(st, payload: dict, currency: str, client) -> None:
     render_section_header(st, "Market Opportunities")
     result = payload.get("recommendations")
     if not result:
@@ -604,6 +617,34 @@ def _opportunities_section(st, payload: dict, currency: str) -> None:
             for risk in item.get("risks") or []:
                 st.caption(f"Risk · {risk}")
             st.caption(str(item.get("advisory_notice") or "Advisory analysis only."))
+            asset_id = str(item.get("asset_id") or "")
+            if not client.recommendation_writes_configured:
+                st.caption("Recommendation capture is not enabled for this environment.")
+            elif st.button("Capture Recommendation", key=f"capture_recommendation_{asset_id}"):
+                st.session_state["pending_recommendation_capture"] = asset_id
+            if st.session_state.get("pending_recommendation_capture") == asset_id:
+                st.warning("Confirming will store an immutable historical snapshot. It will not dispatch the asset.")
+                render_summary_grid(st, _capture_summary(item, currency))
+                confirm, cancel = st.columns(2)
+                with confirm:
+                    if st.button("Confirm Capture", key=f"confirm_capture_{asset_id}", type="primary"):
+                        try:
+                            response = client.capture_recommendation(asset_id)
+                            captured = response.get("recommendation") or {}
+                            st.session_state.pop("pending_recommendation_capture", None)
+                            if response.get("capture_status") == "duplicate":
+                                st.info("An identical recent snapshot already exists. No duplicate record was created.")
+                                st.session_state["selected_recommendation_id"] = captured.get("id")
+                            else:
+                                st.success("Recommendation snapshot captured.")
+                        except DashboardApiError as exc:
+                            if exc.code == "recommendation_writes_disabled":
+                                st.info("Recommendation capture is not enabled for this environment.")
+                            else:
+                                st.error(f"Recommendation capture failed — {exc}")
+                with cancel:
+                    if st.button("Cancel", key=f"cancel_capture_{asset_id}"):
+                        st.session_state.pop("pending_recommendation_capture", None)
 
 
 def _render_live(st, client) -> None:
@@ -675,7 +716,7 @@ def _render_live(st, client) -> None:
         {"label": "Total Discharged Energy", "value": format_energy(total_discharge), "subtitle": "Complete dispatch records", "icon": "⇥"},
         {"label": "Last Successful Sync", "value": format_timestamp(kpis.get("last_api_sync_at") or refreshed_at, zone), "subtitle": f"Request latency · {payload.get('latency_ms', 0):.0f} ms", "icon": "◷", "tone": "positive"},
     ])
-    _opportunities_section(st, payload, currency)
+    _opportunities_section(st, payload, currency, client)
     _market_section(st, data, currency, zone)
     _performance_section(st, data, currency, zone)
     _dispatch_section(st, data, currency, zone)

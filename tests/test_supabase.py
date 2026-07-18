@@ -89,6 +89,23 @@ def test_missing_configuration_fails_clearly(monkeypatch):
         raise AssertionError("Expected SupabaseError")
 
 
+def test_simulation_candidates_are_scoped_by_stable_ownership(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        supabase, "_request",
+        lambda method, table, **kwargs: captured.update(
+            {"method": method, "table": table, **kwargs}
+        ) or [],
+    )
+    supabase.list_simulation_results(
+        portfolio_id="portfolio-uuid", asset_id="BAT-001", limit=25
+    )
+    assert captured["table"] == "simulation_results"
+    assert captured["params"]["portfolio_id"] == "eq.portfolio-uuid"
+    assert captured["params"]["asset_id"] == "eq.BAT-001"
+    assert captured["params"]["limit"] == 25
+
+
 def test_migration_defines_authoritative_schema_integrity():
     sql = Path(
         "supabase/migrations/202607130001_supabase_system_of_record.sql"

@@ -48,6 +48,7 @@ class Only1ApiClient:
         *,
         timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
         session: Any = requests,
+        recommendation_write_token: str | None = None,
     ) -> None:
         configured_url = _configured_api_base_url(base_url)
         if not configured_url:
@@ -59,6 +60,11 @@ class Only1ApiClient:
         self.base_url = configured_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
         self.session = session
+        self._recommendation_write_token = (
+            recommendation_write_token
+            if recommendation_write_token is not None
+            else os.getenv("RECOMMENDATION_WRITE_TOKEN", "")
+        ).strip()
         self.last_latency_ms: float | None = None
 
     def get_portfolio_summary(
@@ -183,6 +189,64 @@ class Only1ApiClient:
                 "The backend returned invalid recommendation analytics.",
                 code="invalid_response",
             )
+        return payload
+
+    @property
+    def recommendation_writes_configured(self) -> bool:
+        return bool(self._recommendation_write_token)
+
+    def _recommendation_write(self, path: str, *, json: dict | None = None) -> dict:
+        if not self._recommendation_write_token:
+            raise DashboardApiError(
+                "Recommendation capture is not enabled for this environment.",
+                code="recommendation_writes_disabled",
+            )
+        payload = self._request(
+            "post", path, json=json,
+            headers={"X-Recommendation-Key": self._recommendation_write_token},
+        )
+        if not isinstance(payload, dict):
+            raise DashboardApiError(
+                "The backend returned an invalid recommendation workflow response.",
+                code="invalid_response",
+            )
+        return payload
+
+    def capture_recommendation(self, asset_id: str) -> dict:
+        return self._recommendation_write(f"/recommendations/{asset_id}/capture")
+
+    def acknowledge_recommendation(self, recommendation_id: str, note: str = "") -> dict:
+        return self._recommendation_write(
+            f"/recommendations/history/{recommendation_id}/acknowledge",
+            json={"note": note or None},
+        )
+
+    def link_recommendation_simulation(self, recommendation_id: str, simulation_id: str) -> dict:
+        return self._recommendation_write(
+            f"/recommendations/history/{recommendation_id}/link-simulation",
+            json={"record_id": simulation_id},
+        )
+
+    def link_recommendation_dispatch(self, recommendation_id: str, dispatch_id: str) -> dict:
+        return self._recommendation_write(
+            f"/recommendations/history/{recommendation_id}/link-dispatch",
+            json={"record_id": dispatch_id},
+        )
+
+    def get_simulations(self, *, asset_id: str, limit: int = 100) -> list[dict]:
+        payload = self._request(
+            "get", "/simulations", params={"asset_id": asset_id, "limit": limit}
+        )
+        if not isinstance(payload, list) or any(not isinstance(item, dict) for item in payload):
+            raise DashboardApiError("The backend returned invalid simulations.", code="invalid_response")
+        return payload
+
+    def get_dispatch_events(self, *, asset_id: str, limit: int = 100) -> list[dict]:
+        payload = self._request(
+            "get", "/dispatch-events", params={"asset_id": asset_id, "limit": limit}
+        )
+        if not isinstance(payload, list) or any(not isinstance(item, dict) for item in payload):
+            raise DashboardApiError("The backend returned invalid dispatches.", code="invalid_response")
         return payload
 
     def _request(self, method: str, path: str, **kwargs: Any) -> Any:

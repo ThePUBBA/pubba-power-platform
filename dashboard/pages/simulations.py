@@ -1,5 +1,7 @@
 """Enterprise historical storage simulation workflow presented through FastAPI."""
 
+from datetime import date, datetime
+
 import plotly.graph_objects as go
 
 from dashboard.api_client import DashboardApiError, Only1ApiClient
@@ -15,6 +17,14 @@ from dashboard.formatting import as_decimal, format_currency, format_energy, for
 
 def render(st, client: Only1ApiClient) -> None:
     prepared = st.session_state.get("recommendation_simulation_inputs") or {}
+    prepared_date = date.today()
+    if prepared.get("market_timestamp"):
+        try:
+            prepared_date = datetime.fromisoformat(
+                str(prepared["market_timestamp"]).replace("Z", "+00:00")
+            ).date()
+        except ValueError:
+            pass
     render_page_header(
         st, "Storage Simulations",
         "Evaluate calculated storage economics against historical CAISO market prices.",
@@ -35,7 +45,7 @@ def render(st, client: Only1ApiClient) -> None:
             market_options = ["RTM", "DAM", "HASP", "RTPD"]
             prepared_market = str(prepared.get("market") or "RTM")
             market = st.selectbox("Market type", market_options, index=market_options.index(prepared_market) if prepared_market in market_options else 0, help="CAISO market run used for the price series.")
-            simulation_date = st.date_input("Historical trade date", help="The historical date evaluated by the simulation.")
+            simulation_date = st.date_input("Historical trade date", value=prepared_date, help="The historical date evaluated by the simulation.")
         with asset_col:
             st.caption("STORAGE ASSUMPTIONS")
             power_mw = st.number_input("Power capacity (MW)", min_value=0.01, value=max(0.01, float(prepared.get("power_mw") or 10.0)), help="Maximum charge or discharge power.")
@@ -44,7 +54,7 @@ def render(st, client: Only1ApiClient) -> None:
             cycles = st.number_input("Cycles", min_value=0.01, value=1.0)
         cost_a, cost_b, identity = st.columns(3)
         with cost_a:
-            storage_fee = st.number_input("Storage fee (USD/MWh)", min_value=0.0)
+            storage_fee = st.number_input("Storage fee (USD/MWh)", min_value=0.0, value=max(0.0, float(prepared.get("storage_fee_per_mwh") or 0)))
         with cost_b:
             variable_om = st.number_input("Variable O&M (USD/MWh)", min_value=0.0, value=max(0.0, float(prepared.get("variable_om_per_mwh") or 0)))
         with identity:

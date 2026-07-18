@@ -225,6 +225,7 @@ def history_analytics(records: list[dict[str, Any]]) -> dict[str, Any]:
             sum(profit_variances) if profit_variances else None
         ),
         "linked_outcome_sample_size": len(realized_profits),
+        "completed_linked_outcomes": len(realized_profits),
         "accuracy_available": len(realized_profits) >= 10,
         "accuracy_message": (
             "Insufficient linked outcomes for model accuracy analysis."

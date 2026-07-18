@@ -39,6 +39,7 @@ from supabase import (
     list_dispatch_events,
     list_portfolio_latest_telemetry,
     list_recommendation_history,
+    list_simulation_results,
     list_telemetry_history,
     find_recent_recommendation_capture,
     persist_simulation,
@@ -842,6 +843,7 @@ def create_app() -> FastAPI:
         minimum_score: Optional[int] = Query(default=None, ge=0, le=100),
         linked_simulation: Optional[bool] = None,
         linked_dispatch: Optional[bool] = None,
+        outcome_status: Optional[str] = None,
         limit: int = Query(default=100, ge=1, le=1000),
         offset: int = Query(default=0, ge=0),
     ):
@@ -852,6 +854,21 @@ def create_app() -> FastAPI:
                 raise ApiError(400, "invalid_timestamp", f"{field} must include a timezone offset", field=field)
         if start_time and end_time and start_time > end_time:
             raise ApiError(400, "invalid_date_range", "start_time must be on or before end_time")
+        outcome_filters = {
+            "no_action_taken": (False, False),
+            "simulation_only": (True, False),
+            "dispatch_linked": (None, True),
+        }
+        if outcome_status:
+            if outcome_status not in outcome_filters:
+                raise ApiError(400, "invalid_outcome_status", "Unknown outcome status", field="outcome_status")
+            outcome_simulation, outcome_dispatch = outcome_filters[outcome_status]
+            if linked_simulation is not None and outcome_simulation is not None and linked_simulation != outcome_simulation:
+                raise ApiError(400, "conflicting_filters", "Outcome status conflicts with simulation filter")
+            if linked_dispatch is not None and linked_dispatch != outcome_dispatch:
+                raise ApiError(400, "conflicting_filters", "Outcome status conflicts with dispatch filter")
+            linked_simulation = outcome_simulation if outcome_simulation is not None else linked_simulation
+            linked_dispatch = outcome_dispatch
         try:
             records = list_recommendation_history(
                 portfolio_id=portfolio_id, asset_id=asset_id, direction=direction,
@@ -902,7 +919,9 @@ def create_app() -> FastAPI:
             })
         except SupabaseError as exc:
             _raise_supabase_api_error(exc)
-        return history_detail(updated)
+        return history_detail(
+            updated, simulation=detail.get("simulation"), dispatch=detail.get("dispatch")
+        )
 
     @app.post("/recommendations/history/{recommendation_id}/link-simulation")
     def link_recommendation_simulation(
@@ -1045,6 +1064,21 @@ def create_app() -> FastAPI:
                 status=status,
                 limit=limit,
                 offset=offset,
+            )
+        except SupabaseError as exc:
+            _raise_supabase_api_error(exc)
+
+    @app.get("/simulations")
+    def simulations(
+        asset_id: Optional[str] = None,
+        limit: int = Query(default=100, ge=1, le=1000),
+        offset: int = Query(default=0, ge=0),
+    ):
+        try:
+            portfolio = get_default_portfolio()
+            return list_simulation_results(
+                portfolio_id=portfolio["id"], asset_id=asset_id,
+                limit=limit, offset=offset,
             )
         except SupabaseError as exc:
             _raise_supabase_api_error(exc)
