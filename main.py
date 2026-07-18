@@ -46,6 +46,7 @@ from supabase import (
     list_portfolio_latest_telemetry,
     list_recommendation_history,
     list_operator_audit_events,
+    list_operator_portfolios,
     list_operators,
     list_simulation_results,
     list_telemetry_history,
@@ -54,6 +55,8 @@ from supabase import (
     update_asset,
     update_operator,
     update_recommendation_links,
+    get_operator_portfolio_access,
+    transactional_operator_action,
 )
 from caiso import CaisoOasisError, fetch_lmp_data
 from simulation import StorageSimulationError, simulate_storage_profit
@@ -80,6 +83,7 @@ from services.operator_auth import (
     OperatorPrincipal,
     ROLES,
     operator_auth_required,
+    operator_auth_mode,
     principal_from_record,
     verify_oidc_token,
 )
@@ -319,6 +323,12 @@ class OperatorCreateRequest(BaseModel):
 class OperatorUpdateRequest(BaseModel):
     role: Optional[str] = None
     status: Optional[str] = None
+
+
+class OperatorPortfolioAccessRequest(BaseModel):
+    portfolio_id: str = Field(min_length=1)
+    role_override: Optional[str] = None
+    active: bool = True
 
 
 class ReportPeriodResponse(BaseModel):
@@ -575,7 +585,76 @@ def create_app() -> FastAPI:
     def optional_read_operator(
         authorization: Optional[str] = Header(default=None, alias="Authorization"),
     ) -> OperatorPrincipal | None:
-        return resolve_operator(authorization) if operator_auth_required() else None
+        mode = operator_auth_mode()
+        if mode == "off":
+            return None
+        if mode == "enforce":
+            return resolve_operator(authorization)
+        if not authorization:
+            logger.info("Operator authentication shadow evaluation", extra={"outcome": "missing"})
+            return None
+        try:
+            return resolve_operator(authorization)
+        except ApiError as exc:
+            logger.warning(
+                "Operator authentication shadow evaluation",
+                extra={"outcome": "would_deny", "error_code": exc.error_code},
+            )
+            return None
+
+    def portfolio_rbac_enabled() -> bool:
+        return os.getenv("OPERATOR_PORTFOLIO_RBAC_ENABLED", "false").strip().lower() in {
+            "1", "true", "yes", "on",
+        }
+
+    def transactional_audit_enabled() -> bool:
+        return os.getenv("OPERATOR_TRANSACTIONAL_AUDIT_ENABLED", "false").strip().lower() in {
+            "1", "true", "yes", "on",
+        }
+
+    def require_portfolio_permission(
+        principal: OperatorPrincipal, portfolio_id: str, permission: str,
+    ) -> str:
+        """Resolve effective portfolio role server-side; never trust client claims."""
+        if not portfolio_rbac_enabled() or principal.role == "admin":
+            if not principal.can(permission):
+                raise ApiError(403, "operator_forbidden", "Operator is not authorized for this action")
+            return principal.role
+        try:
+            assignment = get_operator_portfolio_access(principal.operator_id, portfolio_id)
+        except SupabaseError as exc:
+            _raise_supabase_api_error(exc)
+        if not assignment:
+            raise ApiError(404, "portfolio_not_found", "Portfolio was not found")
+        role = str(assignment.get("role_override") or principal.role)
+        effective = OperatorPrincipal(
+            operator_id=principal.operator_id, auth_subject=principal.auth_subject,
+            email=principal.email, display_name=principal.display_name,
+            role=role, status=principal.status,
+        )
+        if not effective.can(permission):
+            raise ApiError(403, "operator_forbidden", "Operator is not authorized for this action")
+        return role
+
+    def resolve_read_portfolio(
+        principal: OperatorPrincipal | None, requested_portfolio_id: str | None,
+    ) -> str | None:
+        if not principal or not portfolio_rbac_enabled() or principal.role == "admin":
+            return requested_portfolio_id
+        try:
+            assignments = list_operator_portfolios(principal.operator_id)
+        except SupabaseError as exc:
+            _raise_supabase_api_error(exc)
+        allowed = {str(item.get("portfolio_id")) for item in assignments if item.get("active", True)}
+        if requested_portfolio_id:
+            if requested_portfolio_id not in allowed:
+                raise ApiError(404, "portfolio_not_found", "Portfolio was not found")
+            return requested_portfolio_id
+        if len(allowed) == 1:
+            return next(iter(allowed))
+        if not allowed:
+            raise ApiError(404, "portfolio_not_found", "Portfolio was not found")
+        raise ApiError(400, "portfolio_required", "An authorized portfolio must be selected")
 
     def require_permission(permission: str):
         def dependency(
@@ -625,6 +704,20 @@ def create_app() -> FastAPI:
             )
         except SupabaseError:
             logger.warning("Rejected operator action audit could not be persisted")
+
+    def atomic_recommendation_action(
+        principal: OperatorPrincipal, recommendation_id: str,
+        action: str, payload: dict | None = None,
+    ) -> dict:
+        return transactional_operator_action(
+            "pubba_audited_recommendation_action",
+            {
+                "p_operator_id": principal.operator_id,
+                "p_recommendation_id": recommendation_id,
+                "p_action": action,
+                "p_payload": payload or {},
+            },
+        )
 
     @app.get("/")
     def root():
@@ -857,8 +950,13 @@ def create_app() -> FastAPI:
 
     @app.get("/recommendations/portfolio")
     def portfolio_recommendations(
+        portfolio_id: Optional[str] = None,
         principal: OperatorPrincipal | None = Depends(optional_read_operator),
     ):
+        if principal:
+            portfolio_id = resolve_read_portfolio(principal, portfolio_id)
+            if portfolio_id:
+                require_portfolio_permission(principal, portfolio_id, "recommendations:read")
         return current_recommendations()
 
     @app.get("/recommendations/assets/{asset_id}")
@@ -935,6 +1033,9 @@ def create_app() -> FastAPI:
             )
         try:
             portfolio = get_default_portfolio()
+            require_portfolio_permission(
+                principal, str(portfolio["id"]), "recommendations:capture"
+            )
             asset_record = get_asset(asset_id)
             if not asset_record:
                 raise ApiError(404, "asset_not_found", "Asset was not found", field="asset_id")
@@ -965,11 +1066,17 @@ def create_app() -> FastAPI:
                 )
                 response.status_code = 200
                 return {"capture_status": "duplicate", "recommendation": existing}
-            created = create_recommendation_capture(snapshot)
-            audit_action(
-                principal, "recommendation_captured", "recommendation",
-                str(created["id"]), metadata={"asset_id": asset_id},
-            )
+            if transactional_audit_enabled():
+                created = transactional_operator_action(
+                    "pubba_audited_recommendation_capture",
+                    {"p_operator_id": principal.operator_id, "p_snapshot": snapshot},
+                )
+            else:
+                created = create_recommendation_capture(snapshot)
+                audit_action(
+                    principal, "recommendation_captured", "recommendation",
+                    str(created["id"]), metadata={"asset_id": asset_id},
+                )
         except SupabaseError as exc:
             _raise_supabase_api_error(exc)
         return {"capture_status": "captured", "recommendation": created}
@@ -988,6 +1095,7 @@ def create_app() -> FastAPI:
         offset: int = Query(default=0, ge=0),
         principal: OperatorPrincipal | None = Depends(optional_read_operator),
     ):
+        portfolio_id = resolve_read_portfolio(principal, portfolio_id)
         if direction and direction not in {"charge", "discharge", "hold", "insufficient_data"}:
             raise ApiError(400, "invalid_direction", "Unknown recommendation direction", field="direction")
         for field, value in (("start_time", start_time), ("end_time", end_time)):
@@ -1046,7 +1154,12 @@ def create_app() -> FastAPI:
         recommendation_id: str,
         principal: OperatorPrincipal | None = Depends(optional_read_operator),
     ):
-        return load_history_detail(recommendation_id)
+        detail = load_history_detail(recommendation_id)
+        if principal:
+            require_portfolio_permission(
+                principal, str(detail["portfolio_id"]), "recommendations:read"
+            )
+        return detail
 
     @app.post("/recommendations/history/{recommendation_id}/acknowledge")
     def acknowledge_recommendation(
@@ -1057,6 +1170,9 @@ def create_app() -> FastAPI:
     ):
         require_operator_writes()
         detail = load_history_detail(recommendation_id)
+        require_portfolio_permission(
+            principal, str(detail["portfolio_id"]), "recommendations:acknowledge"
+        )
         if detail.get("acknowledged_at"):
             audit_rejected(
                 principal, "recommendation_acknowledgement_duplicate",
@@ -1064,15 +1180,20 @@ def create_app() -> FastAPI:
             )
             raise ApiError(409, "recommendation_already_acknowledged", "Recommendation was already acknowledged")
         try:
-            updated = update_recommendation_links(recommendation_id, {
-                "acknowledged_at": datetime.now(timezone.utc).isoformat(),
-                "acknowledgement_note": request.note,
-                "acknowledgement_attribution": f"operator:{principal.operator_id}",
-            })
-            audit_action(
-                principal, "recommendation_acknowledged", "recommendation",
-                recommendation_id, metadata={"note_supplied": bool(request.note)},
-            )
+            if transactional_audit_enabled():
+                atomic_recommendation_action(
+                    principal, recommendation_id, "acknowledge", {"note": request.note}
+                )
+            else:
+                updated = update_recommendation_links(recommendation_id, {
+                    "acknowledged_at": datetime.now(timezone.utc).isoformat(),
+                    "acknowledgement_note": request.note,
+                    "acknowledgement_attribution": f"operator:{principal.operator_id}",
+                })
+                audit_action(
+                    principal, "recommendation_acknowledged", "recommendation",
+                    recommendation_id, metadata={"note_supplied": bool(request.note)},
+                )
         except SupabaseError as exc:
             _raise_supabase_api_error(exc)
         return load_history_detail(recommendation_id)
@@ -1086,6 +1207,9 @@ def create_app() -> FastAPI:
     ):
         require_operator_writes()
         detail = load_history_detail(recommendation_id)
+        require_portfolio_permission(
+            principal, str(detail["portfolio_id"]), "recommendations:link_simulation"
+        )
         if detail.get("simulation_id"):
             if str(detail["simulation_id"]) == request.record_id:
                 return detail
@@ -1101,14 +1225,20 @@ def create_app() -> FastAPI:
             ):
                 audit_rejected(principal, "simulation_link_rejected", "recommendation", recommendation_id)
                 raise ApiError(409, "simulation_link_mismatch", "Simulation does not match recommendation ownership")
-            updated = update_recommendation_links(recommendation_id, {
-                "simulation_id": simulation["id"],
-                "simulation_linked_at": datetime.now(timezone.utc).isoformat(),
-            })
-            audit_action(
-                principal, "simulation_linked", "recommendation", recommendation_id,
-                metadata={"simulation_id": str(simulation["id"])},
-            )
+            if transactional_audit_enabled():
+                atomic_recommendation_action(
+                    principal, recommendation_id, "link_simulation",
+                    {"record_id": str(simulation["id"])},
+                )
+            else:
+                updated = update_recommendation_links(recommendation_id, {
+                    "simulation_id": simulation["id"],
+                    "simulation_linked_at": datetime.now(timezone.utc).isoformat(),
+                })
+                audit_action(
+                    principal, "simulation_linked", "recommendation", recommendation_id,
+                    metadata={"simulation_id": str(simulation["id"])},
+                )
         except SupabaseError as exc:
             _raise_supabase_api_error(exc)
         return load_history_detail(recommendation_id)
@@ -1122,6 +1252,9 @@ def create_app() -> FastAPI:
     ):
         require_operator_writes()
         detail = load_history_detail(recommendation_id)
+        require_portfolio_permission(
+            principal, str(detail["portfolio_id"]), "recommendations:link_simulation"
+        )
         if not detail.get("simulation_id"):
             audit_rejected(principal, "simulation_review_rejected", "recommendation", recommendation_id)
             raise ApiError(409, "simulation_not_linked", "A simulation must be linked before review")
@@ -1129,10 +1262,16 @@ def create_app() -> FastAPI:
             audit_rejected(principal, "simulation_review_duplicate", "recommendation", recommendation_id)
             raise ApiError(409, "simulation_already_reviewed", "The linked simulation was already reviewed")
         try:
-            audit_action(
-                principal, "simulation_reviewed", "recommendation", recommendation_id,
-                metadata={"simulation_id": str(detail["simulation_id"]), "note_supplied": bool(request.note)},
-            )
+            if transactional_audit_enabled():
+                atomic_recommendation_action(
+                    principal, recommendation_id, "review_simulation",
+                    {"simulation_id": str(detail["simulation_id"]), "note": request.note},
+                )
+            else:
+                audit_action(
+                    principal, "simulation_reviewed", "recommendation", recommendation_id,
+                    metadata={"simulation_id": str(detail["simulation_id"]), "note_supplied": bool(request.note)},
+                )
         except SupabaseError as exc:
             _raise_supabase_api_error(exc)
         return load_history_detail(recommendation_id)
@@ -1146,6 +1285,9 @@ def create_app() -> FastAPI:
     ):
         require_operator_writes()
         detail = load_history_detail(recommendation_id)
+        require_portfolio_permission(
+            principal, str(detail["portfolio_id"]), "recommendations:link_dispatch"
+        )
         if detail.get("dispatch_id"):
             if str(detail["dispatch_id"]) == request.record_id:
                 return detail
@@ -1162,14 +1304,20 @@ def create_app() -> FastAPI:
             ):
                 audit_rejected(principal, "dispatch_link_rejected", "recommendation", recommendation_id)
                 raise ApiError(409, "dispatch_link_mismatch", "Dispatch does not match recommendation ownership")
-            updated = update_recommendation_links(recommendation_id, {
-                "dispatch_id": dispatch["id"],
-                "dispatch_linked_at": datetime.now(timezone.utc).isoformat(),
-            })
-            audit_action(
-                principal, "dispatch_linked", "recommendation", recommendation_id,
-                metadata={"dispatch_id": str(dispatch["id"])},
-            )
+            if transactional_audit_enabled():
+                atomic_recommendation_action(
+                    principal, recommendation_id, "link_dispatch",
+                    {"record_id": str(dispatch["id"])},
+                )
+            else:
+                updated = update_recommendation_links(recommendation_id, {
+                    "dispatch_id": dispatch["id"],
+                    "dispatch_linked_at": datetime.now(timezone.utc).isoformat(),
+                })
+                audit_action(
+                    principal, "dispatch_linked", "recommendation", recommendation_id,
+                    metadata={"dispatch_id": str(dispatch["id"])},
+                )
         except SupabaseError as exc:
             _raise_supabase_api_error(exc)
         return load_history_detail(recommendation_id)
@@ -1183,22 +1331,33 @@ def create_app() -> FastAPI:
     ):
         require_operator_writes()
         detail = load_history_detail(recommendation_id)
+        require_portfolio_permission(
+            principal, str(detail["portfolio_id"]), "recommendations:approve"
+        )
         if detail.get("approval"):
             audit_rejected(principal, "approval_duplicate_rejected", "recommendation", recommendation_id)
             raise ApiError(409, "approval_already_recorded", "An approval decision is already recorded")
         try:
-            approval = create_recommendation_approval({
-                "recommendation_id": recommendation_id,
-                "approved_by_operator_id": principal.operator_id,
-                "approval_status": request.approval_status,
-                "approval_note": request.note,
-            })
-            audit_action(
-                principal,
-                "recommendation_approved" if request.approval_status == "approved" else "approval_rejected",
-                "recommendation", recommendation_id,
-                metadata={"approval_status": request.approval_status, "note_supplied": bool(request.note)},
-            )
+            if transactional_audit_enabled():
+                result = atomic_recommendation_action(
+                    principal, recommendation_id,
+                    "approve" if request.approval_status == "approved" else "reject",
+                    {"note": request.note},
+                )
+                approval = result.get("approval") or {}
+            else:
+                approval = create_recommendation_approval({
+                    "recommendation_id": recommendation_id,
+                    "approved_by_operator_id": principal.operator_id,
+                    "approval_status": request.approval_status,
+                    "approval_note": request.note,
+                })
+                audit_action(
+                    principal,
+                    "recommendation_approved" if request.approval_status == "approved" else "approval_rejected",
+                    "recommendation", recommendation_id,
+                    metadata={"approval_status": request.approval_status, "note_supplied": bool(request.note)},
+                )
         except SupabaseError as exc:
             _raise_supabase_api_error(exc)
         return {
@@ -1210,7 +1369,26 @@ def create_app() -> FastAPI:
     def operator_me(
         principal: OperatorPrincipal = Depends(authenticated_operator),
     ):
-        return principal.public_dict()
+        return {"id": principal.operator_id, **principal.public_dict()}
+
+    @app.get("/operators/me/portfolios")
+    def operator_portfolios(
+        principal: OperatorPrincipal = Depends(authenticated_operator),
+    ):
+        try:
+            if principal.role == "admin":
+                portfolio = get_default_portfolio()
+                return [{"access_role": "admin", **portfolio}]
+            records = list_operator_portfolios(principal.operator_id)
+        except SupabaseError as exc:
+            _raise_supabase_api_error(exc)
+        return [
+            {
+                **(item.get("portfolios") or {}),
+                "access_role": item.get("role_override") or principal.role,
+            }
+            for item in records if item.get("portfolios")
+        ]
 
     @app.get("/operators")
     def operators(
@@ -1268,16 +1446,46 @@ def create_app() -> FastAPI:
         if not _operator_rbac_storage_enabled():
             raise ApiError(503, "operator_audit_storage_disabled", "Operator audit storage is not enabled")
         try:
-            updated = update_operator(operator_id, fields)
-            audit_action(
-                principal, "operator_access_updated", "operator", operator_id,
-                metadata=fields,
-            )
+            if transactional_audit_enabled():
+                updated = transactional_operator_action(
+                    "pubba_audited_operator_update",
+                    {"p_actor_operator_id": principal.operator_id,
+                     "p_target_operator_id": operator_id, "p_changes": fields},
+                )
+            else:
+                updated = update_operator(operator_id, fields)
+                audit_action(
+                    principal, "operator_access_updated", "operator", operator_id,
+                    metadata=fields,
+                )
         except SupabaseError as exc:
             _raise_supabase_api_error(exc)
         return {key: updated.get(key) for key in (
             "id", "email", "display_name", "role", "status", "created_at", "updated_at"
         )}
+
+    @app.put("/operators/{operator_id}/portfolio-access")
+    def change_operator_portfolio_access(
+        operator_id: str, request: OperatorPortfolioAccessRequest,
+        principal: OperatorPrincipal = Depends(require_permission("operators:manage")),
+    ):
+        if request.role_override not in (None, "viewer", "operator", "approver"):
+            raise ApiError(422, "invalid_portfolio_role", "Portfolio role override is invalid")
+        if not transactional_audit_enabled():
+            raise ApiError(503, "transactional_audit_disabled", "Transactional auditing is not enabled")
+        try:
+            return transactional_operator_action(
+                "pubba_audited_portfolio_access_change",
+                {
+                    "p_actor_operator_id": principal.operator_id,
+                    "p_target_operator_id": operator_id,
+                    "p_portfolio_id": request.portfolio_id,
+                    "p_role_override": request.role_override,
+                    "p_active": request.active,
+                },
+            )
+        except SupabaseError as exc:
+            _raise_supabase_api_error(exc)
 
     @app.post("/telemetry", status_code=201)
     def add_telemetry(
@@ -1345,6 +1553,7 @@ def create_app() -> FastAPI:
 
     @app.get("/dispatch-events")
     def dispatch_events(
+        portfolio_id: Optional[str] = None,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
         asset_id: Optional[str] = None,
@@ -1353,10 +1562,13 @@ def create_app() -> FastAPI:
         status: Optional[str] = None,
         limit: int = Query(default=100, ge=1, le=1000),
         offset: int = Query(default=0, ge=0),
+        principal: OperatorPrincipal | None = Depends(optional_read_operator),
     ):
+        portfolio_id = resolve_read_portfolio(principal, portfolio_id)
         _validate_date_range(start_date, end_date)
         try:
             return list_dispatch_events(
+                portfolio_id=portfolio_id,
                 start_date=start_date,
                 end_date=end_date,
                 asset_id=asset_id,
@@ -1371,12 +1583,15 @@ def create_app() -> FastAPI:
 
     @app.get("/simulations")
     def simulations(
+        portfolio_id: Optional[str] = None,
         asset_id: Optional[str] = None,
         limit: int = Query(default=100, ge=1, le=1000),
         offset: int = Query(default=0, ge=0),
+        principal: OperatorPrincipal | None = Depends(optional_read_operator),
     ):
         try:
-            portfolio = get_default_portfolio()
+            portfolio_id = resolve_read_portfolio(principal, portfolio_id)
+            portfolio = get_default_portfolio() if not portfolio_id else {"id": portfolio_id}
             return list_simulation_results(
                 portfolio_id=portfolio["id"], asset_id=asset_id,
                 limit=limit, offset=offset,

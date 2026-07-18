@@ -428,6 +428,35 @@ def list_operators(*, limit: int = 250, offset: int = 0) -> list[dict]:
     )
 
 
+def list_operator_portfolios(operator_id: str) -> list[dict]:
+    """Return only active portfolio assignments for one verified operator."""
+    return _request(
+        "get", "operator_portfolio_access",
+        params={
+            "select": "id,operator_id,portfolio_id,role_override,active,created_at,portfolios(id,code,name,default_market,reporting_timezone,currency_code,status)",
+            "operator_id": f"eq.{operator_id}", "active": "eq.true",
+            "order": "created_at.asc,id.asc",
+        },
+    )
+
+
+def get_operator_portfolio_access(operator_id: str, portfolio_id: str) -> dict | None:
+    records = _request(
+        "get", "operator_portfolio_access",
+        params={"select": "*", "operator_id": f"eq.{operator_id}",
+                "portfolio_id": f"eq.{portfolio_id}", "active": "eq.true", "limit": 1},
+    )
+    return records[0] if records else None
+
+
+def transactional_operator_action(function_name: str, arguments: dict) -> dict:
+    """Execute an audited business mutation through one Postgres transaction."""
+    result = _request("post", f"rpc/{function_name}", json_body=arguments)
+    if isinstance(result, list):
+        return result[0] if result else {}
+    return result
+
+
 def create_operator(fields: dict) -> dict:
     records = _request(
         "post", "operators", json_body=fields, prefer="return=representation"
@@ -488,6 +517,7 @@ def list_operator_audit_events(
 
 def list_dispatch_events(
     *,
+    portfolio_id: str | None = None,
     start_date: date | None = None,
     end_date: date | None = None,
     asset_id: str | None = None,
@@ -507,6 +537,8 @@ def list_dispatch_events(
     )
     if params is None:
         return []
+    if portfolio_id:
+        params["portfolio_id"] = f"eq.{portfolio_id}"
     params.update(
         {
             "select": "*",

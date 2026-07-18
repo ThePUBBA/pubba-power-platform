@@ -7,10 +7,13 @@ import os
 from dashboard.api_client import DashboardApiError, Only1ApiClient
 
 
-def _auth_required() -> bool:
-    return os.getenv("OPERATOR_AUTH_REQUIRED", "false").strip().lower() in {
+def _auth_mode() -> str:
+    configured = os.getenv("OPERATOR_AUTH_MODE", "").strip().lower()
+    if configured in {"off", "shadow", "enforce"}:
+        return configured
+    return "enforce" if os.getenv("OPERATOR_AUTH_REQUIRED", "false").strip().lower() in {
         "1", "true", "yes", "on",
-    }
+    } else "off"
 
 
 def _identity_token(user: object) -> str | None:
@@ -38,7 +41,7 @@ def configure_operator_identity(st, client: Only1ApiClient) -> dict | None:
         logged_in = False
     if not logged_in:
         st.sidebar.caption("Operator identity · Not authenticated")
-        if _auth_required():
+        if _auth_mode() == "enforce":
             st.warning("Operator authentication is required.")
             if hasattr(st, "login") and st.button("Sign in", type="primary"):
                 st.login()
@@ -54,6 +57,8 @@ def configure_operator_identity(st, client: Only1ApiClient) -> dict | None:
         operator = client.get_current_operator()
     except DashboardApiError as exc:
         st.sidebar.caption("Operator identity · Access denied")
+        if _auth_mode() == "shadow":
+            return None
         st.error(f"Operator access is unavailable — {exc}")
         st.stop()
     st.sidebar.markdown(f'**{operator["display_name"]}**')

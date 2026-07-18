@@ -46,6 +46,8 @@ and manual migration procedure are documented in
 Individual OIDC identity, database-resolved roles, explicit approvals, audit events,
 and manual provider/bootstrap steps are documented in
 `docs/architecture/ADR-009-operator-identity-rbac.md`.
+The staged OIDC, first-Admin, portfolio access, transactional audit, and rollback
+procedure is documented in `docs/deployment/operator-identity-rollout.md`.
 
 ## Repository
 

@@ -61,6 +61,7 @@ class Only1ApiClient:
         self.timeout_seconds = timeout_seconds
         self.session = session
         self._operator_access_token = (operator_access_token or "").strip()
+        self._portfolio_id: str | None = None
         self.last_latency_ms: float | None = None
 
     def get_portfolio_summary(
@@ -251,6 +252,15 @@ class Only1ApiClient:
             raise DashboardApiError("The backend returned invalid operator identity.", code="invalid_response")
         return payload
 
+    def get_authorized_portfolios(self) -> list[dict]:
+        payload = self._request("get", "/operators/me/portfolios")
+        if not isinstance(payload, list) or any(not isinstance(item, dict) for item in payload):
+            raise DashboardApiError("The backend returned invalid portfolio access.", code="invalid_response")
+        return payload
+
+    def set_portfolio_context(self, portfolio_id: str | None) -> None:
+        self._portfolio_id = (portfolio_id or "").strip() or None
+
     def get_operators(self) -> list[dict]:
         payload = self._request("get", "/operators")
         if not isinstance(payload, list) or any(not isinstance(item, dict) for item in payload):
@@ -267,6 +277,14 @@ class Only1ApiClient:
         payload = self._request("patch", f"/operators/{operator_id}", json=fields)
         if not isinstance(payload, dict):
             raise DashboardApiError("The backend returned an invalid operator.", code="invalid_response")
+        return payload
+
+    def update_operator_portfolio_access(self, operator_id: str, fields: dict) -> dict:
+        payload = self._request(
+            "put", f"/operators/{operator_id}/portfolio-access", json=fields
+        )
+        if not isinstance(payload, dict):
+            raise DashboardApiError("The backend returned invalid portfolio access.", code="invalid_response")
         return payload
 
     def get_simulations(self, *, asset_id: str, limit: int = 100) -> list[dict]:
@@ -287,6 +305,8 @@ class Only1ApiClient:
 
     def _request(self, method: str, path: str, **kwargs: Any) -> Any:
         started = perf_counter()
+        if self._portfolio_id and method.lower() == "get" and not path.startswith("/operators"):
+            kwargs["params"] = {**kwargs.get("params", {}), "portfolio_id": self._portfolio_id}
         if self._operator_access_token:
             kwargs["headers"] = {
                 **kwargs.get("headers", {}),

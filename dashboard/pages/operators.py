@@ -66,3 +66,35 @@ def render(st, client: Only1ApiClient, operator: dict | None = None) -> None:
                 st.rerun()
             except DashboardApiError as exc:
                 st.error(f"Operator access could not be updated — {exc}")
+
+        render_section_header(st, "Portfolio Assignment")
+        try:
+            portfolios = client.get_authorized_portfolios()
+        except DashboardApiError as exc:
+            st.caption(f"Portfolio assignments are unavailable — {exc}")
+            portfolios = []
+        if portfolios:
+            portfolio_options = {str(item["id"]): item for item in portfolios}
+            portfolio_id = st.selectbox(
+                "Portfolio", list(portfolio_options),
+                format_func=lambda value: str(
+                    portfolio_options[value].get("name")
+                    or portfolio_options[value].get("code") or value
+                ),
+            )
+            override = st.selectbox(
+                "Portfolio role", ["Use global role", "viewer", "operator", "approver"]
+            )
+            active = st.checkbox("Portfolio access active", value=True)
+            assignment_confirmed = st.checkbox("Confirm portfolio access change")
+            if st.button("Update Portfolio Access", disabled=not assignment_confirmed):
+                try:
+                    client.update_operator_portfolio_access(selected, {
+                        "portfolio_id": portfolio_id,
+                        "role_override": None if override == "Use global role" else override,
+                        "active": active,
+                    })
+                    st.success("Portfolio access updated and audited transactionally.")
+                    st.rerun()
+                except DashboardApiError as exc:
+                    st.error(f"Portfolio access could not be updated — {exc}")

@@ -8,10 +8,12 @@ from functools import lru_cache
 from typing import Any
 
 import jwt
+import requests
 from jwt import PyJWKClient
 
 
 ROLES = ("viewer", "operator", "approver", "admin")
+AUTH_MODES = ("off", "shadow", "enforce")
 ROLE_PERMISSIONS = {
     "viewer": frozenset({"recommendations:read"}),
     "operator": frozenset({"recommendations:read", "recommendations:capture", "recommendations:acknowledge", "recommendations:link_simulation"}),
@@ -48,13 +50,41 @@ class OperatorPrincipal:
 
 
 def operator_auth_required() -> bool:
-    return os.getenv("OPERATOR_AUTH_REQUIRED", "false").strip().lower() in {"1", "true", "yes", "on"}
+    return operator_auth_mode() == "enforce"
+
+
+def operator_auth_mode() -> str:
+    """Return the staged rollout mode, preserving the legacy boolean switch."""
+    configured = os.getenv("OPERATOR_AUTH_MODE", "").strip().lower()
+    if configured:
+        if configured not in AUTH_MODES:
+            raise OperatorAuthError("Operator authentication mode is invalid")
+        return configured
+    return (
+        "enforce"
+        if os.getenv("OPERATOR_AUTH_REQUIRED", "false").strip().lower()
+        in {"1", "true", "yes", "on"}
+        else "off"
+    )
 
 
 @lru_cache(maxsize=8)
 def _jwks_client(issuer: str) -> PyJWKClient:
+    try:
+        response = requests.get(
+            f"{issuer}/.well-known/openid-configuration", timeout=10
+        )
+        response.raise_for_status()
+        metadata = response.json()
+        if str(metadata.get("issuer") or "").rstrip("/") != issuer:
+            raise OperatorAuthError("OIDC discovery issuer does not match configuration")
+        jwks_uri = str(metadata.get("jwks_uri") or "").strip()
+        if not jwks_uri.startswith("https://"):
+            raise OperatorAuthError("OIDC discovery did not provide a secure JWKS URI")
+    except (requests.RequestException, ValueError, TypeError) as exc:
+        raise OperatorAuthError("OIDC discovery is unavailable") from exc
     return PyJWKClient(
-        f"{issuer}/.well-known/jwks.json", cache_jwk_set=True, lifespan=600
+        jwks_uri, cache_jwk_set=True, lifespan=600
     )
 
 

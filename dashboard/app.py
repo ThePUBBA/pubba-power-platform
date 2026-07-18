@@ -32,6 +32,26 @@ def main() -> None:
         render_error_state(st, str(exc))
         return
     operator = configure_operator_identity(st, client)
+    if operator:
+        try:
+            portfolios = client.get_authorized_portfolios()
+        except DashboardApiError as exc:
+            st.sidebar.caption(f"Portfolio access unavailable · {exc}")
+            portfolios = []
+        if len(portfolios) == 1:
+            client.set_portfolio_context(str(portfolios[0].get("id") or ""))
+            st.session_state["pubba_portfolio_id"] = portfolios[0].get("id")
+        elif len(portfolios) > 1:
+            options = {str(item.get("id")): item for item in portfolios}
+            current = str(st.session_state.get("pubba_portfolio_id") or "")
+            selected = st.sidebar.selectbox(
+                "Portfolio",
+                list(options),
+                index=list(options).index(current) if current in options else 0,
+                format_func=lambda value: str(options[value].get("name") or options[value].get("code") or value),
+            )
+            st.session_state["pubba_portfolio_id"] = selected
+            client.set_portfolio_context(selected)
     pages = ["Overview", "Simulations", "Recommendation History"]
     if operator and operator.get("role") == "admin":
         pages.append("Operator Access")
