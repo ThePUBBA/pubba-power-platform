@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, time
 
 from dashboard.api_client import DashboardApiError, Only1ApiClient
+from dashboard.auth import can
 from dashboard.components import render_page_header, render_section_header, render_summary_grid
 from dashboard.formatting import format_currency, format_timestamp
 
@@ -55,6 +56,14 @@ def _prepare_simulation_inputs(detail: dict) -> dict:
         "market_timestamp": detail.get("market_timestamp"),
         "estimated_break_even_price_per_mwh": detail.get("estimated_break_even_price"),
     }
+
+
+def _audit_actor(detail: dict, action: str) -> str:
+    event = next(
+        (item for item in detail.get("audit_events") or [] if item.get("action") == action),
+        None,
+    )
+    return str(((event or {}).get("operator") or {}).get("display_name") or "Not available")
 
 
 def _filters(st, client: Only1ApiClient) -> dict:
@@ -130,19 +139,22 @@ def _safe_rerun(st) -> None:
         st.rerun()
 
 
-def _operator_actions(st, client: Only1ApiClient, detail: dict) -> None:
+def _operator_actions(
+    st, client: Only1ApiClient, detail: dict, operator: dict | None = None,
+) -> None:
     render_section_header(st, "Operator Actions")
-    if not client.recommendation_writes_configured:
-        st.info("Recommendation capture is not enabled for this environment.")
+    if not operator:
+        st.info("Authenticated operator access is required for decision actions.")
+        return
     recommendation_id = str(detail["id"])
     acknowledge, prepare = st.columns(2)
     with acknowledge:
         if detail.get("acknowledged_at"):
             st.success(
                 f'Acknowledged {format_timestamp(detail.get("acknowledged_at"), ZONE)} · '
-                f'{detail.get("acknowledgement_attribution") or "system"}'
+                f'{_audit_actor(detail, "recommendation_acknowledged")}'
             )
-        else:
+        elif can(operator, "operator", "approver", "admin"):
             note = st.text_input("Acknowledgement note (optional)", key=f"ack_note_{recommendation_id}")
             confirmed = st.checkbox(
                 "Confirm acknowledgement", key=f"ack_confirm_{recommendation_id}"
@@ -154,9 +166,11 @@ def _operator_actions(st, client: Only1ApiClient, detail: dict) -> None:
                     _safe_rerun(st)
                 except DashboardApiError as exc:
                     st.error(f"Acknowledgement failed — {exc}")
+        else:
+            st.caption("Operator role or higher is required to acknowledge.")
     with prepare:
         st.caption("Copy persisted assumptions into the simulation form for operator review.")
-        if st.button("Prepare Simulation", key=f"prepare_{recommendation_id}"):
+        if can(operator, "operator", "approver", "admin") and st.button("Prepare Simulation", key=f"prepare_{recommendation_id}"):
             st.session_state["recommendation_simulation_inputs"] = _prepare_simulation_inputs(detail)
             st.success("Simulation inputs prepared. Open Simulations to review them; nothing was run.")
 
@@ -165,7 +179,30 @@ def _operator_actions(st, client: Only1ApiClient, detail: dict) -> None:
         st.caption("LINK EXISTING SIMULATION")
         if detail.get("simulation_id"):
             st.info(f'Simulation linked · {detail["simulation_id"]}')
-        else:
+            reviewed = any(
+                item.get("action") == "simulation_reviewed"
+                for item in detail.get("audit_events") or []
+            )
+            if reviewed:
+                st.success(f'Simulation reviewed by {_audit_actor(detail, "simulation_reviewed")}')
+            elif can(operator, "operator", "approver", "admin"):
+                review_note = st.text_input(
+                    "Simulation review note (optional)", key=f"simulation_review_note_{recommendation_id}"
+                )
+                review_confirmed = st.checkbox(
+                    "Confirm simulation review", key=f"simulation_review_confirm_{recommendation_id}"
+                )
+                if st.button(
+                    "Mark Simulation Reviewed", key=f"review_simulation_{recommendation_id}",
+                    disabled=not review_confirmed,
+                ):
+                    try:
+                        client.review_recommendation_simulation(recommendation_id, review_note)
+                        st.success("Simulation review persisted and attributed.")
+                        _safe_rerun(st)
+                    except DashboardApiError as exc:
+                        st.error(f"Simulation review failed — {exc}")
+        elif can(operator, "operator", "approver", "admin"):
             try:
                 candidates = client.get_simulations(asset_id=str(detail["asset_id"]), limit=100)
             except DashboardApiError as exc:
@@ -191,11 +228,13 @@ def _operator_actions(st, client: Only1ApiClient, detail: dict) -> None:
                         _safe_rerun(st)
                     except DashboardApiError as exc:
                         st.error(f"Simulation link failed — {exc}")
+        else:
+            st.caption("Operator role or higher is required to link simulations.")
     with dispatch:
         st.caption("LINK EXISTING DISPATCH")
         if detail.get("dispatch_id"):
             st.info(f'Dispatch linked · {detail["dispatch_id"]}')
-        else:
+        elif can(operator, "approver", "admin"):
             try:
                 candidates = client.get_dispatch_events(asset_id=str(detail["asset_id"]), limit=100)
             except DashboardApiError as exc:
@@ -221,6 +260,35 @@ def _operator_actions(st, client: Only1ApiClient, detail: dict) -> None:
                         _safe_rerun(st)
                     except DashboardApiError as exc:
                         st.error(f"Dispatch link failed — {exc}")
+        else:
+            st.caption("Approver role or higher is required to link dispatches.")
+
+    render_section_header(st, "Approval Decision")
+    approval = detail.get("approval")
+    if approval:
+        approver = (approval.get("operator") or {}).get("display_name") or "Not available"
+        render_summary_grid(st, [
+            ("Approval status", _label(approval.get("approval_status"))),
+            ("Approved by", str(approver)),
+            ("Approval time", format_timestamp(approval.get("approved_at"), ZONE)),
+            ("Approval note", approval.get("approval_note") or "Not available"),
+        ])
+    elif can(operator, "approver", "admin"):
+        decision = st.selectbox(
+            "Approval decision", ["approved", "rejected"],
+            key=f"approval_decision_{recommendation_id}",
+        )
+        note = st.text_input("Approval note (optional)", key=f"approval_note_{recommendation_id}")
+        confirmed = st.checkbox("Confirm approval decision", key=f"approval_confirm_{recommendation_id}")
+        if st.button("Record Approval Decision", key=f"approve_{recommendation_id}", disabled=not confirmed):
+            try:
+                client.decide_recommendation_approval(recommendation_id, decision, note)
+                st.success("Approval decision persisted and audited.")
+                _safe_rerun(st)
+            except DashboardApiError as exc:
+                st.error(f"Approval decision failed — {exc}")
+    else:
+        st.caption("Approver role or higher is required to record an approval decision.")
 
 
 def _render_outcome(st, detail: dict) -> None:
@@ -246,7 +314,7 @@ def _render_outcome(st, detail: dict) -> None:
     ])
 
 
-def render(st, client: Only1ApiClient) -> None:
+def render(st, client: Only1ApiClient, operator: dict | None = None) -> None:
     render_page_header(
         st, "Recommendation History",
         "Immutable advisory snapshots, explicit operator decisions, and linked outcomes.",
@@ -302,9 +370,13 @@ def render(st, client: Only1ApiClient) -> None:
         ("Recommendation", detail.get("recommendation") or "Not available"),
         ("Estimated profit", _optional_currency(detail.get("estimated_gross_profit"))),
         ("Operational readiness", _label(detail.get("operational_readiness"))),
+        ("Captured by", _audit_actor(detail, "recommendation_captured")),
+        ("Acknowledged by", _audit_actor(detail, "recommendation_acknowledged")),
+        ("Simulation linked by", _audit_actor(detail, "simulation_linked")),
+        ("Dispatch linked by", _audit_actor(detail, "dispatch_linked")),
     ])
     st.markdown(str(detail.get("explanation") or "Explanation unavailable."))
-    _operator_actions(st, client, detail)
+    _operator_actions(st, client, detail, operator)
 
     comparison = detail.get("simulation_comparison")
     if comparison:

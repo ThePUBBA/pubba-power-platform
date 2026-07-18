@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 import plotly.graph_objects as go
 
 from dashboard.api_client import DashboardApiError
+from dashboard.auth import can
 from dashboard.charts import (
     CHART_CONFIG,
     GRAY,
@@ -566,7 +567,7 @@ def _capture_summary(item: dict, currency: str) -> list[tuple[str, str]]:
     ]
 
 
-def _opportunities_section(st, payload: dict, currency: str, client) -> None:
+def _opportunities_section(st, payload: dict, currency: str, client, operator=None) -> None:
     render_section_header(st, "Market Opportunities")
     result = payload.get("recommendations")
     if not result:
@@ -618,7 +619,9 @@ def _opportunities_section(st, payload: dict, currency: str, client) -> None:
                 st.caption(f"Risk · {risk}")
             st.caption(str(item.get("advisory_notice") or "Advisory analysis only."))
             asset_id = str(item.get("asset_id") or "")
-            if not client.recommendation_writes_configured:
+            if not can(operator, "operator", "approver", "admin"):
+                st.caption("Operator role or higher is required to capture recommendations.")
+            elif not client.recommendation_writes_configured:
                 st.caption("Recommendation capture is not enabled for this environment.")
             elif st.button("Capture Recommendation", key=f"capture_recommendation_{asset_id}"):
                 st.session_state["pending_recommendation_capture"] = asset_id
@@ -647,7 +650,7 @@ def _opportunities_section(st, payload: dict, currency: str, client) -> None:
                         st.session_state.pop("pending_recommendation_capture", None)
 
 
-def _render_live(st, client) -> None:
+def _render_live(st, client, operator=None) -> None:
     control, action = st.columns([5, 1])
     with control:
         timezone_name = st.text_input("Reporting timezone", placeholder="Use portfolio default", help="Optional IANA timezone such as America/Denver.")
@@ -716,7 +719,7 @@ def _render_live(st, client) -> None:
         {"label": "Total Discharged Energy", "value": format_energy(total_discharge), "subtitle": "Complete dispatch records", "icon": "⇥"},
         {"label": "Last Successful Sync", "value": format_timestamp(kpis.get("last_api_sync_at") or refreshed_at, zone), "subtitle": f"Request latency · {payload.get('latency_ms', 0):.0f} ms", "icon": "◷", "tone": "positive"},
     ])
-    _opportunities_section(st, payload, currency, client)
+    _opportunities_section(st, payload, currency, client, operator)
     _market_section(st, data, currency, zone)
     _performance_section(st, data, currency, zone)
     _dispatch_section(st, data, currency, zone)
@@ -769,6 +772,6 @@ def _render_live(st, client) -> None:
     render_data_freshness(st, format_timestamp(metadata.get("data_freshness_at"), zone))
 
 
-def render(st, client) -> None:
+def render(st, client, operator=None) -> None:
     # Streamlit fragments provide bounded 60-second reruns without re-running navigation.
-    st.fragment(run_every=60)(_render_live)(st, client)
+    st.fragment(run_every=60)(_render_live)(st, client, operator)

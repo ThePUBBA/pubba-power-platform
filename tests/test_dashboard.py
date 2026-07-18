@@ -156,24 +156,23 @@ def test_recommendation_history_client_handles_empty_and_detail_contracts():
 
 
 def test_recommendation_write_client_is_explicit_and_server_side(monkeypatch):
-    monkeypatch.delenv("RECOMMENDATION_WRITE_TOKEN", raising=False)
     disabled = Only1ApiClient("https://api.example.test", session=Session())
     assert disabled.recommendation_writes_configured is False
-    with pytest.raises(DashboardApiError, match="not enabled") as caught:
+    with pytest.raises(DashboardApiError, match="authentication is required") as caught:
         disabled.capture_recommendation("BAT-001")
-    assert caught.value.code == "recommendation_writes_disabled"
+    assert caught.value.code == "authentication_required"
 
     session = Session(Response({"capture_status": "captured", "recommendation": {"id": "history-1"}}))
     client = Only1ApiClient(
         "https://api.example.test", session=session,
-        recommendation_write_token="server-only-secret",
+        operator_access_token="signed-oidc-token",
     )
     result = client.capture_recommendation("BAT-001")
     assert result["capture_status"] == "captured"
     method, url, kwargs = session.calls[0]
     assert method == "post"
     assert url.endswith("/recommendations/BAT-001/capture")
-    assert kwargs["headers"] == {"X-Recommendation-Key": "server-only-secret"}
+    assert kwargs["headers"] == {"Authorization": "Bearer signed-oidc-token"}
 
 
 @pytest.mark.parametrize("action", ["acknowledge", "simulation", "dispatch"])
@@ -181,7 +180,7 @@ def test_recommendation_actions_submit_stable_ids(action):
     session = Session(Response({"id": "history-1"}))
     client = Only1ApiClient(
         "https://api.example.test", session=session,
-        recommendation_write_token="secret",
+        operator_access_token="signed-oidc-token",
     )
     if action == "acknowledge":
         client.acknowledge_recommendation("history-1", "Reviewed")

@@ -126,21 +126,62 @@ def evaluate_outcome(
 def decision_timeline(
     record: dict[str, Any], *, simulation: dict[str, Any] | None = None,
     dispatch: dict[str, Any] | None = None,
+    approval: dict[str, Any] | None = None,
+    audit_events: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    events = [
-        {"event": "recommendation_generated", "timestamp": record.get("generated_at"), "attribution": "PUBBA Power"},
-        {"event": "recommendation_captured", "timestamp": record.get("captured_at") or record.get("created_at"), "attribution": "system"},
-    ]
-    if record.get("acknowledged_at"):
+    audit_events = audit_events or []
+    audit_by_action = {str(item.get("action")): item for item in audit_events}
+
+    def actor(event: dict[str, Any] | None, fallback: str) -> str:
+        operator = (event or {}).get("operator") or {}
+        return str(operator.get("display_name") or fallback)
+
+    events = [{
+        "event": "recommendation_generated", "timestamp": record.get("generated_at"),
+        "attribution": "PUBBA Power",
+    }]
+    captured_audit = audit_by_action.get("recommendation_captured")
+    events.append({
+        "event": "recommendation_captured",
+        "timestamp": (captured_audit or {}).get("occurred_at") or record.get("captured_at") or record.get("created_at"),
+        "attribution": actor(captured_audit, "Attribution unavailable"),
+    })
+    acknowledged_audit = audit_by_action.get("recommendation_acknowledged")
+    if record.get("acknowledged_at") or acknowledged_audit:
         events.append({
             "event": "recommendation_acknowledged",
-            "timestamp": record["acknowledged_at"],
-            "attribution": record.get("acknowledgement_attribution") or "system",
+            "timestamp": (acknowledged_audit or {}).get("occurred_at") or record.get("acknowledged_at"),
+            "attribution": actor(acknowledged_audit, "Attribution unavailable"),
         })
-    if simulation and record.get("simulation_linked_at"):
-        events.append({"event": "simulation_linked", "timestamp": record["simulation_linked_at"], "attribution": "system"})
-    if dispatch and record.get("dispatch_linked_at"):
-        events.append({"event": "dispatch_linked", "timestamp": record["dispatch_linked_at"], "attribution": "system"})
+    simulation_audit = audit_by_action.get("simulation_linked")
+    if simulation and (record.get("simulation_linked_at") or simulation_audit):
+        events.append({
+            "event": "simulation_linked",
+            "timestamp": (simulation_audit or {}).get("occurred_at") or record.get("simulation_linked_at"),
+            "attribution": actor(simulation_audit, "Attribution unavailable"),
+        })
+    simulation_review_audit = audit_by_action.get("simulation_reviewed")
+    if simulation_review_audit:
+        events.append({
+            "event": "simulation_reviewed",
+            "timestamp": simulation_review_audit.get("occurred_at"),
+            "attribution": actor(simulation_review_audit, "Attribution unavailable"),
+        })
+    approval_action = "recommendation_approved" if (approval or {}).get("approval_status") == "approved" else "approval_rejected"
+    approval_audit = audit_by_action.get(approval_action)
+    if approval:
+        events.append({
+            "event": approval_action,
+            "timestamp": (approval_audit or {}).get("occurred_at") or approval.get("approved_at"),
+            "attribution": actor(approval_audit, str((approval.get("operator") or {}).get("display_name") or "Attribution unavailable")),
+        })
+    dispatch_audit = audit_by_action.get("dispatch_linked")
+    if dispatch and (record.get("dispatch_linked_at") or dispatch_audit):
+        events.append({
+            "event": "dispatch_linked",
+            "timestamp": (dispatch_audit or {}).get("occurred_at") or record.get("dispatch_linked_at"),
+            "attribution": actor(dispatch_audit, "Attribution unavailable"),
+        })
         if str(dispatch.get("status") or "").lower() == "completed":
             events.append({
                 "event": "dispatch_completed",
@@ -156,6 +197,8 @@ def decision_timeline(
 def history_detail(
     record: dict[str, Any], *, simulation: dict[str, Any] | None = None,
     dispatch: dict[str, Any] | None = None,
+    approval: dict[str, Any] | None = None,
+    audit_events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     simulation_comparison = None
     if simulation:
@@ -185,10 +228,13 @@ def history_detail(
         **record,
         "simulation": simulation,
         "dispatch": dispatch,
+        "approval": approval,
+        "audit_events": audit_events or [],
         "simulation_comparison": simulation_comparison,
         "outcome": evaluate_outcome(record, simulation=simulation, dispatch=dispatch),
         "decision_timeline": decision_timeline(
-            record, simulation=simulation, dispatch=dispatch
+            record, simulation=simulation, dispatch=dispatch,
+            approval=approval, audit_events=audit_events,
         ),
     }
 

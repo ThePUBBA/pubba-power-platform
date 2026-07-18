@@ -1,5 +1,9 @@
 # ADR-008: Recommendation history, decision audit, and outcomes
 
+> Authentication note: ADR-009 supersedes the shared `X-Recommendation-Key` design for
+> all operator actions. The description below records the original history phase; the
+> current API requires a verified OIDC identity and database-resolved role.
+
 ## Relationship audit
 
 Recommendation history uses existing stable identifiers. `portfolio_id` references

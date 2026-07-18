@@ -16,6 +16,7 @@ Thumbs.db
 *.pem
 *.key
 secrets/
+.streamlit/secrets.toml
 
 # Python environments and caches
 .venv/

@@ -9,7 +9,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
 
-from fastapi import FastAPI, Header, Query, Request
+from fastapi import Depends, FastAPI, Header, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,11 +23,17 @@ from supabase import (
     aggregate_report,
     check_supabase_connectivity,
     create_asset,
+    create_operator,
+    create_operator_audit_event,
     create_recommendation_capture,
+    create_recommendation_approval,
     create_telemetry,
     derive_idempotency_key,
     get_asset_performance,
     get_asset,
+    get_operator,
+    get_operator_by_subject,
+    get_recommendation_approval,
     get_default_portfolio,
     get_latest_telemetry,
     get_latest_telemetry_for_source,
@@ -39,11 +45,14 @@ from supabase import (
     list_dispatch_events,
     list_portfolio_latest_telemetry,
     list_recommendation_history,
+    list_operator_audit_events,
+    list_operators,
     list_simulation_results,
     list_telemetry_history,
     find_recent_recommendation_capture,
     persist_simulation,
     update_asset,
+    update_operator,
     update_recommendation_links,
 )
 from caiso import CaisoOasisError, fetch_lmp_data
@@ -65,6 +74,14 @@ from services.recommendation_history import (
     history_analytics,
     history_detail,
     recommendation_snapshot,
+)
+from services.operator_auth import (
+    OperatorAuthError,
+    OperatorPrincipal,
+    ROLES,
+    operator_auth_required,
+    principal_from_record,
+    verify_oidc_token,
 )
 
 
@@ -286,6 +303,24 @@ class RecommendationAcknowledgementRequest(BaseModel):
     note: Optional[str] = Field(default=None, max_length=1000)
 
 
+class RecommendationApprovalRequest(BaseModel):
+    approval_status: str = Field(pattern="^(approved|rejected)$")
+    note: Optional[str] = Field(default=None, max_length=1000)
+
+
+class OperatorCreateRequest(BaseModel):
+    auth_subject: str = Field(min_length=1, max_length=255)
+    email: str = Field(min_length=3, max_length=320)
+    display_name: str = Field(min_length=1, max_length=255)
+    role: str
+    status: str = "active"
+
+
+class OperatorUpdateRequest(BaseModel):
+    role: Optional[str] = None
+    status: Optional[str] = None
+
+
 class ReportPeriodResponse(BaseModel):
     period_start: str
     period_end: str
@@ -458,13 +493,10 @@ def _telemetry_writes_allowed(write_key: str | None) -> bool:
     return bool(expected and write_key) and hmac.compare_digest(write_key, expected)
 
 
-def _recommendation_writes_allowed(write_key: str | None) -> bool:
-    if os.getenv("RECOMMENDATION_WRITES_ENABLED", "").strip().lower() not in {
-        "1", "true", "yes",
-    }:
-        return False
-    expected = os.getenv("RECOMMENDATION_WRITE_TOKEN", "")
-    return bool(expected and write_key) and hmac.compare_digest(write_key, expected)
+def _operator_rbac_storage_enabled() -> bool:
+    return os.getenv("OPERATOR_RBAC_STORAGE_ENABLED", "false").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
 
 
 def create_app() -> FastAPI:
@@ -511,6 +543,88 @@ def create_app() -> FastAPI:
                 field=field or None,
             ),
         )
+
+    def resolve_operator(authorization: str | None) -> OperatorPrincipal:
+        if not authorization or not authorization.startswith("Bearer "):
+            raise ApiError(401, "authentication_required", "Operator authentication is required")
+        token = authorization.removeprefix("Bearer ").strip()
+        if not token:
+            raise ApiError(401, "authentication_required", "Operator authentication is required")
+        try:
+            identity = verify_oidc_token(token)
+            record = get_operator_by_subject(identity.subject)
+        except OperatorAuthError as exc:
+            raise ApiError(401, "invalid_operator_credential", str(exc)) from exc
+        except SupabaseError as exc:
+            _raise_supabase_api_error(exc)
+        if not record:
+            raise ApiError(403, "operator_not_provisioned", "Operator access is not provisioned")
+        try:
+            principal = principal_from_record(record)
+        except OperatorAuthError as exc:
+            raise ApiError(403, "operator_access_denied", "Operator access is not authorized") from exc
+        if principal.status != "active":
+            raise ApiError(403, "operator_inactive", "Operator access is inactive")
+        return principal
+
+    def authenticated_operator(
+        authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    ) -> OperatorPrincipal:
+        return resolve_operator(authorization)
+
+    def optional_read_operator(
+        authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    ) -> OperatorPrincipal | None:
+        return resolve_operator(authorization) if operator_auth_required() else None
+
+    def require_permission(permission: str):
+        def dependency(
+            principal: OperatorPrincipal = Depends(authenticated_operator),
+        ) -> OperatorPrincipal:
+            if not principal.can(permission):
+                if _operator_rbac_storage_enabled():
+                    try:
+                        audit_action(
+                            principal, "authorization_denied", "permission", permission,
+                            outcome="rejected", metadata={},
+                        )
+                    except SupabaseError:
+                        logger.warning("Operator authorization denial audit could not be persisted")
+                raise ApiError(403, "operator_forbidden", "Operator is not authorized for this action")
+            return principal
+        return dependency
+
+    def require_operator_writes() -> None:
+        if os.getenv("RECOMMENDATION_WRITES_ENABLED", "").strip().lower() not in {"1", "true", "yes"}:
+            raise ApiError(403, "recommendation_writes_disabled", "Recommendation audit writes are disabled")
+        if not _operator_rbac_storage_enabled():
+            raise ApiError(503, "operator_audit_storage_disabled", "Operator audit storage is not enabled")
+
+    def audit_action(
+        principal: OperatorPrincipal, action: str, entity_type: str,
+        entity_id: str, *, outcome: str = "succeeded", metadata: dict | None = None,
+    ) -> dict:
+        safe_metadata = {
+            key: value for key, value in (metadata or {}).items()
+            if key.lower() not in {"token", "authorization", "credential", "secret"}
+        }
+        return create_operator_audit_event({
+            "operator_id": principal.operator_id, "action": action,
+            "entity_type": entity_type, "entity_id": entity_id,
+            "outcome": outcome, "metadata": safe_metadata,
+        })
+
+    def audit_rejected(
+        principal: OperatorPrincipal, action: str, entity_type: str,
+        entity_id: str, metadata: dict | None = None,
+    ) -> None:
+        try:
+            audit_action(
+                principal, action, entity_type, entity_id,
+                outcome="rejected", metadata=metadata,
+            )
+        except SupabaseError:
+            logger.warning("Rejected operator action audit could not be persisted")
 
     @app.get("/")
     def root():
@@ -742,11 +856,16 @@ def create_app() -> FastAPI:
         )
 
     @app.get("/recommendations/portfolio")
-    def portfolio_recommendations():
+    def portfolio_recommendations(
+        principal: OperatorPrincipal | None = Depends(optional_read_operator),
+    ):
         return current_recommendations()
 
     @app.get("/recommendations/assets/{asset_id}")
-    def asset_recommendation(asset_id: str):
+    def asset_recommendation(
+        asset_id: str,
+        principal: OperatorPrincipal | None = Depends(optional_read_operator),
+    ):
         result = current_recommendations()
         recommendation = next((
             item for item in result["recommendations"] if item["asset_id"] == asset_id
@@ -754,13 +873,6 @@ def create_app() -> FastAPI:
         if recommendation is None:
             raise ApiError(404, "asset_not_found", "Asset was not found", field="asset_id")
         return recommendation
-
-    def require_recommendation_write(write_key: str | None) -> None:
-        if not _recommendation_writes_allowed(write_key):
-            raise ApiError(
-                403, "recommendation_writes_disabled",
-                "Recommendation audit writes are disabled or not authorized",
-            )
 
     def load_history_detail(recommendation_id: str) -> dict:
         try:
@@ -778,18 +890,37 @@ def create_app() -> FastAPI:
                 get_dispatch_event_record(str(record["dispatch_id"]))
                 if record.get("dispatch_id") else None
             )
+            approval = None
+            audit_events = []
+            if _operator_rbac_storage_enabled():
+                approval = get_recommendation_approval(recommendation_id)
+                if approval:
+                    approver = get_operator(str(approval["approved_by_operator_id"]))
+                    approval = {**approval, "operator": approver}
+                raw_events = list_operator_audit_events(
+                    entity_type="recommendation", entity_id=recommendation_id
+                )
+                operator_cache: dict[str, dict | None] = {}
+                for event in raw_events:
+                    operator_id = str(event.get("operator_id") or "")
+                    if operator_id not in operator_cache:
+                        operator_cache[operator_id] = get_operator(operator_id)
+                    audit_events.append({**event, "operator": operator_cache[operator_id]})
         except SupabaseError as exc:
             _raise_supabase_api_error(exc)
-        return history_detail(record, simulation=simulation, dispatch=dispatch)
+        return history_detail(
+            record, simulation=simulation, dispatch=dispatch,
+            approval=approval, audit_events=audit_events,
+        )
 
     @app.post("/recommendations/{asset_id}/capture", status_code=201)
     def capture_recommendation(
         asset_id: str, response: Response,
-        x_recommendation_key: Optional[str] = Header(
-            default=None, alias="X-Recommendation-Key"
+        principal: OperatorPrincipal = Depends(
+            require_permission("recommendations:capture")
         ),
     ):
-        require_recommendation_write(x_recommendation_key)
+        require_operator_writes()
         current = current_recommendations()
         item = next((
             value for value in current["recommendations"]
@@ -827,9 +958,18 @@ def create_app() -> FastAPI:
                 since=datetime.now(timezone.utc) - timedelta(seconds=duplicate_seconds),
             )
             if existing:
+                audit_action(
+                    principal, "recommendation_capture_duplicate", "recommendation",
+                    str(existing["id"]), outcome="rejected",
+                    metadata={"asset_id": asset_id},
+                )
                 response.status_code = 200
                 return {"capture_status": "duplicate", "recommendation": existing}
             created = create_recommendation_capture(snapshot)
+            audit_action(
+                principal, "recommendation_captured", "recommendation",
+                str(created["id"]), metadata={"asset_id": asset_id},
+            )
         except SupabaseError as exc:
             _raise_supabase_api_error(exc)
         return {"capture_status": "captured", "recommendation": created}
@@ -846,6 +986,7 @@ def create_app() -> FastAPI:
         outcome_status: Optional[str] = None,
         limit: int = Query(default=100, ge=1, le=1000),
         offset: int = Query(default=0, ge=0),
+        principal: OperatorPrincipal | None = Depends(optional_read_operator),
     ):
         if direction and direction not in {"charge", "discharge", "hold", "insufficient_data"}:
             raise ApiError(400, "invalid_direction", "Unknown recommendation direction", field="direction")
@@ -881,7 +1022,9 @@ def create_app() -> FastAPI:
         return {"records": records, "count": len(records), "limit": limit, "offset": offset}
 
     @app.get("/recommendations/history/analytics")
-    def recommendation_history_portfolio_analytics():
+    def recommendation_history_portfolio_analytics(
+        principal: OperatorPrincipal | None = Depends(optional_read_operator),
+    ):
         try:
             portfolio = get_default_portfolio()
             records = list_recommendation_history(
@@ -899,84 +1042,242 @@ def create_app() -> FastAPI:
         return history_analytics(enriched)
 
     @app.get("/recommendations/history/{recommendation_id}")
-    def recommendation_history_detail(recommendation_id: str):
+    def recommendation_history_detail(
+        recommendation_id: str,
+        principal: OperatorPrincipal | None = Depends(optional_read_operator),
+    ):
         return load_history_detail(recommendation_id)
 
     @app.post("/recommendations/history/{recommendation_id}/acknowledge")
     def acknowledge_recommendation(
         recommendation_id: str, request: RecommendationAcknowledgementRequest,
-        x_recommendation_key: Optional[str] = Header(default=None, alias="X-Recommendation-Key"),
+        principal: OperatorPrincipal = Depends(
+            require_permission("recommendations:acknowledge")
+        ),
     ):
-        require_recommendation_write(x_recommendation_key)
+        require_operator_writes()
         detail = load_history_detail(recommendation_id)
         if detail.get("acknowledged_at"):
+            audit_rejected(
+                principal, "recommendation_acknowledgement_duplicate",
+                "recommendation", recommendation_id,
+            )
             raise ApiError(409, "recommendation_already_acknowledged", "Recommendation was already acknowledged")
         try:
             updated = update_recommendation_links(recommendation_id, {
                 "acknowledged_at": datetime.now(timezone.utc).isoformat(),
                 "acknowledgement_note": request.note,
-                "acknowledgement_attribution": "authenticated_operator_workflow",
+                "acknowledgement_attribution": f"operator:{principal.operator_id}",
             })
+            audit_action(
+                principal, "recommendation_acknowledged", "recommendation",
+                recommendation_id, metadata={"note_supplied": bool(request.note)},
+            )
         except SupabaseError as exc:
             _raise_supabase_api_error(exc)
-        return history_detail(
-            updated, simulation=detail.get("simulation"), dispatch=detail.get("dispatch")
-        )
+        return load_history_detail(recommendation_id)
 
     @app.post("/recommendations/history/{recommendation_id}/link-simulation")
     def link_recommendation_simulation(
         recommendation_id: str, request: RecommendationLinkRequest,
-        x_recommendation_key: Optional[str] = Header(default=None, alias="X-Recommendation-Key"),
+        principal: OperatorPrincipal = Depends(
+            require_permission("recommendations:link_simulation")
+        ),
     ):
-        require_recommendation_write(x_recommendation_key)
+        require_operator_writes()
         detail = load_history_detail(recommendation_id)
         if detail.get("simulation_id"):
             if str(detail["simulation_id"]) == request.record_id:
                 return detail
+            audit_rejected(principal, "simulation_link_rejected", "recommendation", recommendation_id)
             raise ApiError(409, "simulation_already_linked", "Recommendation already has a simulation link")
         try:
             simulation = get_simulation_result(request.record_id)
             if not simulation:
+                audit_rejected(principal, "simulation_link_rejected", "recommendation", recommendation_id)
                 raise ApiError(404, "simulation_not_found", "Simulation was not found")
             if simulation.get("portfolio_id") != detail.get("portfolio_id") or (
                 simulation.get("asset_id") and simulation.get("asset_id") != detail.get("asset_id")
             ):
+                audit_rejected(principal, "simulation_link_rejected", "recommendation", recommendation_id)
                 raise ApiError(409, "simulation_link_mismatch", "Simulation does not match recommendation ownership")
             updated = update_recommendation_links(recommendation_id, {
                 "simulation_id": simulation["id"],
                 "simulation_linked_at": datetime.now(timezone.utc).isoformat(),
             })
+            audit_action(
+                principal, "simulation_linked", "recommendation", recommendation_id,
+                metadata={"simulation_id": str(simulation["id"])},
+            )
         except SupabaseError as exc:
             _raise_supabase_api_error(exc)
-        return history_detail(updated, simulation=simulation, dispatch=detail.get("dispatch"))
+        return load_history_detail(recommendation_id)
+
+    @app.post("/recommendations/history/{recommendation_id}/review-simulation")
+    def review_recommendation_simulation(
+        recommendation_id: str, request: RecommendationAcknowledgementRequest,
+        principal: OperatorPrincipal = Depends(
+            require_permission("recommendations:link_simulation")
+        ),
+    ):
+        require_operator_writes()
+        detail = load_history_detail(recommendation_id)
+        if not detail.get("simulation_id"):
+            audit_rejected(principal, "simulation_review_rejected", "recommendation", recommendation_id)
+            raise ApiError(409, "simulation_not_linked", "A simulation must be linked before review")
+        if any(event.get("action") == "simulation_reviewed" for event in detail.get("audit_events") or []):
+            audit_rejected(principal, "simulation_review_duplicate", "recommendation", recommendation_id)
+            raise ApiError(409, "simulation_already_reviewed", "The linked simulation was already reviewed")
+        try:
+            audit_action(
+                principal, "simulation_reviewed", "recommendation", recommendation_id,
+                metadata={"simulation_id": str(detail["simulation_id"]), "note_supplied": bool(request.note)},
+            )
+        except SupabaseError as exc:
+            _raise_supabase_api_error(exc)
+        return load_history_detail(recommendation_id)
 
     @app.post("/recommendations/history/{recommendation_id}/link-dispatch")
     def link_recommendation_dispatch(
         recommendation_id: str, request: RecommendationLinkRequest,
-        x_recommendation_key: Optional[str] = Header(default=None, alias="X-Recommendation-Key"),
+        principal: OperatorPrincipal = Depends(
+            require_permission("recommendations:link_dispatch")
+        ),
     ):
-        require_recommendation_write(x_recommendation_key)
+        require_operator_writes()
         detail = load_history_detail(recommendation_id)
         if detail.get("dispatch_id"):
             if str(detail["dispatch_id"]) == request.record_id:
                 return detail
+            audit_rejected(principal, "dispatch_link_rejected", "recommendation", recommendation_id)
             raise ApiError(409, "dispatch_already_linked", "Recommendation already has a dispatch link")
         try:
             dispatch = get_dispatch_event_record(request.record_id)
             if not dispatch:
+                audit_rejected(principal, "dispatch_link_rejected", "recommendation", recommendation_id)
                 raise ApiError(404, "dispatch_not_found", "Dispatch was not found")
             if (
                 dispatch.get("portfolio_id") != detail.get("portfolio_id")
                 or dispatch.get("asset_id") != detail.get("asset_id")
             ):
+                audit_rejected(principal, "dispatch_link_rejected", "recommendation", recommendation_id)
                 raise ApiError(409, "dispatch_link_mismatch", "Dispatch does not match recommendation ownership")
             updated = update_recommendation_links(recommendation_id, {
                 "dispatch_id": dispatch["id"],
                 "dispatch_linked_at": datetime.now(timezone.utc).isoformat(),
             })
+            audit_action(
+                principal, "dispatch_linked", "recommendation", recommendation_id,
+                metadata={"dispatch_id": str(dispatch["id"])},
+            )
         except SupabaseError as exc:
             _raise_supabase_api_error(exc)
-        return history_detail(updated, simulation=detail.get("simulation"), dispatch=dispatch)
+        return load_history_detail(recommendation_id)
+
+    @app.post("/recommendations/history/{recommendation_id}/approval", status_code=201)
+    def decide_recommendation_approval(
+        recommendation_id: str, request: RecommendationApprovalRequest,
+        principal: OperatorPrincipal = Depends(
+            require_permission("recommendations:approve")
+        ),
+    ):
+        require_operator_writes()
+        detail = load_history_detail(recommendation_id)
+        if detail.get("approval"):
+            audit_rejected(principal, "approval_duplicate_rejected", "recommendation", recommendation_id)
+            raise ApiError(409, "approval_already_recorded", "An approval decision is already recorded")
+        try:
+            approval = create_recommendation_approval({
+                "recommendation_id": recommendation_id,
+                "approved_by_operator_id": principal.operator_id,
+                "approval_status": request.approval_status,
+                "approval_note": request.note,
+            })
+            audit_action(
+                principal,
+                "recommendation_approved" if request.approval_status == "approved" else "approval_rejected",
+                "recommendation", recommendation_id,
+                metadata={"approval_status": request.approval_status, "note_supplied": bool(request.note)},
+            )
+        except SupabaseError as exc:
+            _raise_supabase_api_error(exc)
+        return {
+            **approval,
+            "operator": principal.public_dict(),
+        }
+
+    @app.get("/operators/me")
+    def operator_me(
+        principal: OperatorPrincipal = Depends(authenticated_operator),
+    ):
+        return principal.public_dict()
+
+    @app.get("/operators")
+    def operators(
+        limit: int = Query(default=250, ge=1, le=1000),
+        offset: int = Query(default=0, ge=0),
+        principal: OperatorPrincipal = Depends(require_permission("operators:manage")),
+    ):
+        try:
+            records = list_operators(limit=limit, offset=offset)
+        except SupabaseError as exc:
+            _raise_supabase_api_error(exc)
+        return [{
+            "id": item.get("id"), "email": item.get("email"),
+            "display_name": item.get("display_name"), "role": item.get("role"),
+            "status": item.get("status"), "created_at": item.get("created_at"),
+            "updated_at": item.get("updated_at"),
+        } for item in records]
+
+    @app.post("/operators", status_code=201)
+    def add_operator(
+        request: OperatorCreateRequest,
+        principal: OperatorPrincipal = Depends(require_permission("operators:manage")),
+    ):
+        if request.role not in ROLES or request.status not in {"active", "inactive"}:
+            raise ApiError(422, "invalid_operator_access", "Operator role or status is invalid")
+        if not _operator_rbac_storage_enabled():
+            raise ApiError(503, "operator_audit_storage_disabled", "Operator audit storage is not enabled")
+        try:
+            created = create_operator({
+                "auth_subject": request.auth_subject.strip(),
+                "email": request.email.strip().lower(),
+                "display_name": request.display_name.strip(),
+                "role": request.role, "status": request.status,
+            })
+            audit_action(
+                principal, "operator_created", "operator", str(created["id"]),
+                metadata={"role": request.role, "status": request.status},
+            )
+        except SupabaseError as exc:
+            _raise_supabase_api_error(exc)
+        return {key: created.get(key) for key in (
+            "id", "email", "display_name", "role", "status", "created_at", "updated_at"
+        )}
+
+    @app.patch("/operators/{operator_id}")
+    def change_operator(
+        operator_id: str, request: OperatorUpdateRequest,
+        principal: OperatorPrincipal = Depends(require_permission("operators:manage")),
+    ):
+        fields = request.model_dump(exclude_none=True)
+        if not fields:
+            raise ApiError(422, "operator_update_required", "A role or status update is required")
+        if fields.get("role") not in (None, *ROLES) or fields.get("status") not in (None, "active", "inactive"):
+            raise ApiError(422, "invalid_operator_access", "Operator role or status is invalid")
+        if not _operator_rbac_storage_enabled():
+            raise ApiError(503, "operator_audit_storage_disabled", "Operator audit storage is not enabled")
+        try:
+            updated = update_operator(operator_id, fields)
+            audit_action(
+                principal, "operator_access_updated", "operator", operator_id,
+                metadata=fields,
+            )
+        except SupabaseError as exc:
+            _raise_supabase_api_error(exc)
+        return {key: updated.get(key) for key in (
+            "id", "email", "display_name", "role", "status", "created_at", "updated_at"
+        )}
 
     @app.post("/telemetry", status_code=201)
     def add_telemetry(

@@ -43,6 +43,10 @@ stable relationships, linkage rules, outcomes, audit timeline, analytics safegua
 and manual migration procedure are documented in
 `docs/architecture/ADR-008-recommendation-history.md`.
 
+Individual OIDC identity, database-resolved roles, explicit approvals, audit events,
+and manual provider/bootstrap steps are documented in
+`docs/architecture/ADR-009-operator-identity-rbac.md`.
+
 ## Repository
 
 The PUBBA Power platform source is hosted at [ThePubba/pubba-power-platform](https://github.com/ThePubba/pubba-power-platform).
@@ -500,7 +504,8 @@ With the API running, use interactive Swagger documentation at `http://localhost
 ## Security Notes
 
 - CORS restricts browser origins; it is not authentication or authorization.
-- This API is intentionally unauthenticated. Deploy it behind an appropriate private network, gateway, or access control before exposing sensitive workflows publicly.
+- Health, market, telemetry, and summary reads remain compatible. Operator workflow endpoints use verified OIDC identity and backend-enforced PUBBA roles when configured.
+- Shared service tokens are not individual identity and never grant operator roles.
 - Do not place secrets, API keys, credentials, or Retool tokens in request bodies, source control, `.env.example`, or client-side Retool JavaScript.
 - Never expose `SUPABASE_SERVICE_ROLE_KEY` to Retool or any browser client.
 - Treat simulation output as historical analysis, not a live dispatch or trading instruction.

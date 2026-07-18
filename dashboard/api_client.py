@@ -48,7 +48,7 @@ class Only1ApiClient:
         *,
         timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
         session: Any = requests,
-        recommendation_write_token: str | None = None,
+        operator_access_token: str | None = None,
     ) -> None:
         configured_url = _configured_api_base_url(base_url)
         if not configured_url:
@@ -60,11 +60,7 @@ class Only1ApiClient:
         self.base_url = configured_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
         self.session = session
-        self._recommendation_write_token = (
-            recommendation_write_token
-            if recommendation_write_token is not None
-            else os.getenv("RECOMMENDATION_WRITE_TOKEN", "")
-        ).strip()
+        self._operator_access_token = (operator_access_token or "").strip()
         self.last_latency_ms: float | None = None
 
     def get_portfolio_summary(
@@ -193,18 +189,18 @@ class Only1ApiClient:
 
     @property
     def recommendation_writes_configured(self) -> bool:
-        return bool(self._recommendation_write_token)
+        return bool(self._operator_access_token)
+
+    def set_operator_access_token(self, token: str | None) -> None:
+        self._operator_access_token = (token or "").strip()
 
     def _recommendation_write(self, path: str, *, json: dict | None = None) -> dict:
-        if not self._recommendation_write_token:
+        if not self._operator_access_token:
             raise DashboardApiError(
-                "Recommendation capture is not enabled for this environment.",
-                code="recommendation_writes_disabled",
+                "Operator authentication is required for this action.",
+                code="authentication_required",
             )
-        payload = self._request(
-            "post", path, json=json,
-            headers={"X-Recommendation-Key": self._recommendation_write_token},
-        )
+        payload = self._request("post", path, json=json)
         if not isinstance(payload, dict):
             raise DashboardApiError(
                 "The backend returned an invalid recommendation workflow response.",
@@ -227,11 +223,51 @@ class Only1ApiClient:
             json={"record_id": simulation_id},
         )
 
+    def review_recommendation_simulation(self, recommendation_id: str, note: str = "") -> dict:
+        return self._recommendation_write(
+            f"/recommendations/history/{recommendation_id}/review-simulation",
+            json={"note": note or None},
+        )
+
     def link_recommendation_dispatch(self, recommendation_id: str, dispatch_id: str) -> dict:
         return self._recommendation_write(
             f"/recommendations/history/{recommendation_id}/link-dispatch",
             json={"record_id": dispatch_id},
         )
+
+    def decide_recommendation_approval(
+        self, recommendation_id: str, approval_status: str, note: str = ""
+    ) -> dict:
+        return self._recommendation_write(
+            f"/recommendations/history/{recommendation_id}/approval",
+            json={"approval_status": approval_status, "note": note or None},
+        )
+
+    def get_current_operator(self) -> dict:
+        payload = self._request("get", "/operators/me")
+        if not isinstance(payload, dict) or payload.get("role") not in {
+            "viewer", "operator", "approver", "admin"
+        }:
+            raise DashboardApiError("The backend returned invalid operator identity.", code="invalid_response")
+        return payload
+
+    def get_operators(self) -> list[dict]:
+        payload = self._request("get", "/operators")
+        if not isinstance(payload, list) or any(not isinstance(item, dict) for item in payload):
+            raise DashboardApiError("The backend returned invalid operators.", code="invalid_response")
+        return payload
+
+    def create_operator(self, fields: dict) -> dict:
+        payload = self._request("post", "/operators", json=fields)
+        if not isinstance(payload, dict):
+            raise DashboardApiError("The backend returned an invalid operator.", code="invalid_response")
+        return payload
+
+    def update_operator(self, operator_id: str, fields: dict) -> dict:
+        payload = self._request("patch", f"/operators/{operator_id}", json=fields)
+        if not isinstance(payload, dict):
+            raise DashboardApiError("The backend returned an invalid operator.", code="invalid_response")
+        return payload
 
     def get_simulations(self, *, asset_id: str, limit: int = 100) -> list[dict]:
         payload = self._request(
@@ -251,6 +287,11 @@ class Only1ApiClient:
 
     def _request(self, method: str, path: str, **kwargs: Any) -> Any:
         started = perf_counter()
+        if self._operator_access_token:
+            kwargs["headers"] = {
+                **kwargs.get("headers", {}),
+                "Authorization": f"Bearer {self._operator_access_token}",
+            }
         try:
             response = self.session.request(
                 method,

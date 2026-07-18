@@ -405,6 +405,87 @@ def update_recommendation_links(recommendation_id: str, fields: dict) -> dict:
     return records[0]
 
 
+def get_operator_by_subject(auth_subject: str) -> dict | None:
+    records = _request(
+        "get", "operators",
+        params={"select": "*", "auth_subject": f"eq.{auth_subject}", "limit": 1},
+    )
+    return records[0] if records else None
+
+
+def get_operator(operator_id: str) -> dict | None:
+    records = _request(
+        "get", "operators",
+        params={"select": "*", "id": f"eq.{operator_id}", "limit": 1},
+    )
+    return records[0] if records else None
+
+
+def list_operators(*, limit: int = 250, offset: int = 0) -> list[dict]:
+    return _request(
+        "get", "operators",
+        params={"select": "*", "order": "display_name.asc,id.asc", "limit": limit, "offset": offset},
+    )
+
+
+def create_operator(fields: dict) -> dict:
+    records = _request(
+        "post", "operators", json_body=fields, prefer="return=representation"
+    )
+    return records[0]
+
+
+def update_operator(operator_id: str, fields: dict) -> dict:
+    records = _request(
+        "patch", "operators", params={"id": f"eq.{operator_id}"},
+        json_body={**fields, "updated_at": datetime.now(timezone.utc).isoformat()},
+        prefer="return=representation",
+    )
+    if not records:
+        raise SupabaseError(
+            "Operator was not found", error_code="operator_not_found", status_code=404,
+            operation="update_operator",
+        )
+    return records[0]
+
+
+def get_recommendation_approval(recommendation_id: str) -> dict | None:
+    records = _request(
+        "get", "recommendation_approvals",
+        params={"select": "*", "recommendation_id": f"eq.{recommendation_id}", "limit": 1},
+    )
+    return records[0] if records else None
+
+
+def create_recommendation_approval(fields: dict) -> dict:
+    records = _request(
+        "post", "recommendation_approvals", json_body=fields,
+        prefer="return=representation",
+    )
+    return records[0]
+
+
+def create_operator_audit_event(fields: dict) -> dict:
+    records = _request(
+        "post", "operator_audit_events", json_body=fields,
+        prefer="return=representation",
+    )
+    return records[0]
+
+
+def list_operator_audit_events(
+    *, entity_type: str, entity_id: str, limit: int = 250,
+) -> list[dict]:
+    return _request(
+        "get", "operator_audit_events",
+        params={
+            "select": "*", "entity_type": f"eq.{entity_type}",
+            "entity_id": f"eq.{entity_id}", "order": "occurred_at.asc,id.asc",
+            "limit": limit,
+        },
+    )
+
+
 def list_dispatch_events(
     *,
     start_date: date | None = None,

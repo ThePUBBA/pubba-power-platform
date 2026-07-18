@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -66,6 +67,19 @@ def history_record(**updates):
     }
     value.update(updates)
     return value
+
+
+def configure_identity(monkeypatch, role="operator", status="active"):
+    monkeypatch.setattr(
+        main, "verify_oidc_token",
+        lambda token: SimpleNamespace(subject="oidc-user-1", email="operator@pubba.test"),
+    )
+    monkeypatch.setattr(main, "get_operator_by_subject", lambda subject: {
+        "id": "55555555-5555-5555-5555-555555555555",
+        "auth_subject": subject, "email": "operator@pubba.test",
+        "display_name": "Test Operator", "role": role, "status": status,
+    })
+    return {"Authorization": "Bearer signed-oidc-token"}
 
 
 def simulation(**updates):
@@ -179,7 +193,8 @@ def test_supabase_history_filters_are_forwarded_without_recomputation(monkeypatc
 def configure_capture(monkeypatch, *, duplicate=None):
     market_time = datetime.now(timezone.utc).isoformat()
     monkeypatch.setenv("RECOMMENDATION_WRITES_ENABLED", "true")
-    monkeypatch.setenv("RECOMMENDATION_WRITE_TOKEN", "operator-secret")
+    monkeypatch.setenv("OPERATOR_RBAC_STORAGE_ENABLED", "true")
+    configure_identity(monkeypatch)
     monkeypatch.setattr(main, "build_dashboard_summary", lambda **kwargs: {
         "metadata": {"market_location": "NODE", "market_type": "RTM", "market_updated_at": market_time},
         "status": {"market_data": "connected"}, "kpis": {"current_market_price_per_mwh": 100},
@@ -197,15 +212,16 @@ def configure_capture(monkeypatch, *, duplicate=None):
     })
     monkeypatch.setattr(main, "find_recent_recommendation_capture", lambda **kwargs: duplicate)
     monkeypatch.setattr(main, "create_recommendation_capture", lambda fields: {"id": RECOMMENDATION_ID, **fields})
+    monkeypatch.setattr(main, "create_operator_audit_event", lambda fields: {"id": "audit-1", **fields})
 
 
 def test_capture_requires_explicit_authorization_and_deduplicates(monkeypatch):
     configure_capture(monkeypatch)
     client = TestClient(main.app)
-    assert client.post("/recommendations/BAT-1/capture").status_code == 403
+    assert client.post("/recommendations/BAT-1/capture").status_code == 401
     captured = client.post(
         "/recommendations/BAT-1/capture",
-        headers={"X-Recommendation-Key": "operator-secret"},
+        headers={"Authorization": "Bearer signed-oidc-token"},
     )
     assert captured.status_code == 201
     assert captured.json()["recommendation"]["recommendation_engine_version"] == "1.0"
@@ -213,7 +229,7 @@ def test_capture_requires_explicit_authorization_and_deduplicates(monkeypatch):
     configure_capture(monkeypatch, duplicate=history_record())
     duplicate = client.post(
         "/recommendations/BAT-1/capture",
-        headers={"X-Recommendation-Key": "operator-secret"},
+        headers={"Authorization": "Bearer signed-oidc-token"},
     )
     assert duplicate.status_code == 200
     assert duplicate.json()["capture_status"] == "duplicate"
@@ -232,13 +248,21 @@ def test_recommendation_gets_never_call_capture(monkeypatch):
     assert TestClient(main.app).get("/recommendations/portfolio").status_code == 200
 
 
-def configure_history_links(monkeypatch):
+def configure_history_links(monkeypatch, role="operator"):
     monkeypatch.setenv("RECOMMENDATION_WRITES_ENABLED", "true")
-    monkeypatch.setenv("RECOMMENDATION_WRITE_TOKEN", "operator-secret")
-    monkeypatch.setattr(main, "get_recommendation_history", lambda value: history_record())
+    monkeypatch.setenv("OPERATOR_RBAC_STORAGE_ENABLED", "true")
+    configure_identity(monkeypatch, role=role)
+    persisted = history_record()
+    monkeypatch.setattr(main, "get_recommendation_history", lambda value: dict(persisted))
     monkeypatch.setattr(main, "get_simulation_result", lambda value: None)
     monkeypatch.setattr(main, "get_dispatch_event_record", lambda value: None)
-    monkeypatch.setattr(main, "update_recommendation_links", lambda value, fields: {**history_record(), **fields})
+    def update(value, fields):
+        persisted.update(fields)
+        return dict(persisted)
+    monkeypatch.setattr(main, "update_recommendation_links", update)
+    monkeypatch.setattr(main, "get_recommendation_approval", lambda value: None)
+    monkeypatch.setattr(main, "list_operator_audit_events", lambda **kwargs: [])
+    monkeypatch.setattr(main, "create_operator_audit_event", lambda fields: {"id": "audit-1", **fields})
 
 
 def test_history_retrieval_empty_and_unknown_id(monkeypatch):
@@ -286,7 +310,7 @@ def test_simulation_candidates_use_default_portfolio_and_asset(monkeypatch):
 def test_simulation_link_is_explicit_and_validated(monkeypatch):
     configure_history_links(monkeypatch)
     client = TestClient(main.app)
-    headers = {"X-Recommendation-Key": "operator-secret"}
+    headers = {"Authorization": "Bearer signed-oidc-token"}
     missing = client.post(
         f"/recommendations/history/{RECOMMENDATION_ID}/link-simulation",
         json={"record_id": SIMULATION_ID}, headers=headers,
@@ -302,12 +326,12 @@ def test_simulation_link_is_explicit_and_validated(monkeypatch):
 
 
 def test_dispatch_link_calculates_realized_outcome(monkeypatch):
-    configure_history_links(monkeypatch)
+    configure_history_links(monkeypatch, role="approver")
     monkeypatch.setattr(main, "get_dispatch_event_record", lambda value: dispatch())
     linked = TestClient(main.app).post(
         f"/recommendations/history/{RECOMMENDATION_ID}/link-dispatch",
         json={"record_id": DISPATCH_ID},
-        headers={"X-Recommendation-Key": "operator-secret"},
+        headers={"Authorization": "Bearer signed-oidc-token"},
     )
     assert linked.status_code == 200
     assert linked.json()["outcome"]["status"] == "dispatch_completed"
