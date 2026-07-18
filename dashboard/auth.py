@@ -31,6 +31,18 @@ def _identity_token(user: object) -> str | None:
         return None
 
 
+def _user_display_name(user: object) -> str:
+    """Return a safe display label from Streamlit's verified OIDC claims."""
+    for key in ("name", "email"):
+        try:
+            value = user[key]
+        except (KeyError, TypeError):
+            value = getattr(user, key, None)
+        if value and str(value).strip():
+            return str(value).strip()
+    return "Authenticated user"
+
+
 def configure_operator_identity(st, client: Only1ApiClient) -> dict | None:
     """Use only Streamlit's verified OIDC session token; never trust form claims."""
     try:
@@ -40,13 +52,16 @@ def configure_operator_identity(st, client: Only1ApiClient) -> dict | None:
         user = None
         logged_in = False
     if not logged_in:
-        st.sidebar.caption("Operator identity · Not authenticated")
-        if _auth_mode() == "enforce":
-            st.warning("Operator authentication is required.")
-            if hasattr(st, "login") and st.button("Sign in", type="primary"):
-                st.login()
-            st.stop()
-        return None
+        st.markdown("PUBBA POWER")
+        st.title("Sign in to PUBBA Power")
+        if st.button("Sign in with Google", type="primary"):
+            st.login()
+        st.stop()
+    st.sidebar.caption("Signed in as")
+    st.sidebar.write(_user_display_name(user))
+    if st.sidebar.button("Logout"):
+        st.logout()
+        st.stop()
     token = _identity_token(user)
     if not token:
         st.sidebar.caption("Operator identity · Token unavailable")
@@ -63,8 +78,6 @@ def configure_operator_identity(st, client: Only1ApiClient) -> dict | None:
         st.stop()
     st.sidebar.markdown(f'**{operator["display_name"]}**')
     st.sidebar.caption(f'Role · {str(operator["role"]).title()}')
-    if hasattr(st, "logout") and st.sidebar.button("Sign out"):
-        st.logout()
     return operator
 
 
