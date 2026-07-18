@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+import os
+
 import plotly.graph_objects as go
 
 
@@ -11,6 +14,26 @@ MUTED = "#A7A7A7"
 GRID = "#2F2F2F"
 GRAY = "#737373"
 CHART_CONFIG = {"displayModeBar": False, "responsive": True}
+
+
+def _telemetry_gap_rows(rows: list[dict]) -> list[dict]:
+    """Insert null observations so Plotly never bridges operational data gaps."""
+    try:
+        threshold = max(60, int(os.getenv("TELEMETRY_CHART_GAP_SECONDS", "1800")))
+    except ValueError:
+        threshold = 1800
+    expanded: list[dict] = []
+    previous_stamp = None
+    for row in rows:
+        try:
+            stamp = datetime.fromisoformat(str(row.get("recorded_at") or "").replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if previous_stamp is not None and (stamp - previous_stamp).total_seconds() > threshold:
+            expanded.append({"recorded_at": previous_stamp + (stamp - previous_stamp) / 2, "_gap_break": True})
+        expanded.append(row)
+        previous_stamp = stamp
+    return expanded
 
 
 def observation_mode(count: int) -> str:
@@ -222,30 +245,47 @@ def trend_figure(rows: list[dict], field: str, *, name: str, color: str, currenc
 
 def telemetry_history_figure(rows: list[dict]) -> go.Figure:
     """Plot observed SOC and current power without interpolating large gaps."""
-    ordered = sorted(rows, key=lambda row: str(row.get("recorded_at") or ""))
+    ordered = _telemetry_gap_rows(
+        sorted(rows, key=lambda row: str(row.get("recorded_at") or ""))
+    )
     fig = go.Figure()
-    soc_rows = [row for row in ordered if row.get("state_of_charge_pct") is not None]
-    power_rows = [row for row in ordered if row.get("current_power_mw") is not None]
+    soc_rows = [row for row in ordered if row.get("state_of_charge_pct") is not None or row.get("_gap_break")]
+    power_rows = [row for row in ordered if row.get("current_power_mw") is not None or row.get("_gap_break")]
     if soc_rows:
         fig.add_scatter(
             x=[row["recorded_at"] for row in soc_rows],
-            y=[row["state_of_charge_pct"] for row in soc_rows],
+            y=[row.get("state_of_charge_pct") for row in soc_rows],
             name="State of charge", yaxis="y", connectgaps=False,
             mode="markers" if len(soc_rows) == 1 else "lines+markers",
             line={"color": MINT, "width": 3}, marker={"color": MINT, "size": 8},
-            customdata=[["Simulated" if row.get("is_simulated") else "Operational"] for row in soc_rows],
+            customdata=[["" if row.get("_gap_break") else "Simulated" if row.get("is_simulated") else "Operational"] for row in soc_rows],
             hovertemplate="%{x|%b %d, %Y · %I:%M %p}<br>%{y:.1f}% SOC<br>%{customdata[0]}<extra></extra>",
         )
     if power_rows:
         fig.add_scatter(
             x=[row["recorded_at"] for row in power_rows],
-            y=[row["current_power_mw"] for row in power_rows],
+            y=[row.get("current_power_mw") for row in power_rows],
             name="Current power", yaxis="y2", connectgaps=False,
             mode="markers" if len(power_rows) == 1 else "lines+markers",
             line={"color": WHITE, "width": 2}, marker={"color": WHITE, "size": 7},
-            customdata=[["Simulated" if row.get("is_simulated") else "Operational"] for row in power_rows],
+            customdata=[["" if row.get("_gap_break") else "Simulated" if row.get("is_simulated") else "Operational"] for row in power_rows],
             hovertemplate="%{x|%b %d, %Y · %I:%M %p}<br>%{y:.2f} MW<br>%{customdata[0]}<extra></extra>",
         )
+    for field, name, color, dash in (
+        ("available_charge_power_mw", "Charge availability", GRAY, "dot"),
+        ("available_discharge_power_mw", "Discharge availability", "#C7C7C7", "dash"),
+    ):
+        available = [row for row in ordered if row.get(field) is not None or row.get("_gap_break")]
+        if available:
+            fig.add_scatter(
+                x=[row["recorded_at"] for row in available],
+                y=[row.get(field) for row in available],
+                name=name, yaxis="y2", connectgaps=False,
+                mode="markers" if len(available) == 1 else "lines+markers",
+                line={"color": color, "width": 2, "dash": dash},
+                marker={"color": color, "size": 6},
+                hovertemplate=f"%{{x|%b %d, %Y · %I:%M %p}}<br>{name} %{{y:.2f}} MW<extra></extra>",
+            )
     fig.update_layout(
         yaxis={"title": "SOC (%)", "range": [0, 100]},
         yaxis2={"title": "Power (MW)", "overlaying": "y", "side": "right", "showgrid": False},

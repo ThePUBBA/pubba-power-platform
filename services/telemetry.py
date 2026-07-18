@@ -14,6 +14,24 @@ DEFAULT_STALE_AFTER_MINUTES = 15
 MAX_FUTURE_SKEW_SECONDS = 60
 
 
+@dataclass(frozen=True)
+class TelemetryFreshnessConfig:
+    fresh_seconds: int = 300
+    delayed_seconds: int = 900
+    stale_seconds: int = 3600
+
+    @classmethod
+    def from_environment(cls) -> "TelemetryFreshnessConfig":
+        values = {
+            "fresh_seconds": int(os.getenv("TELEMETRY_FRESH_SECONDS", "300")),
+            "delayed_seconds": int(os.getenv("TELEMETRY_DELAYED_SECONDS", "900")),
+            "stale_seconds": int(os.getenv("TELEMETRY_STALE_SECONDS", "3600")),
+        }
+        if not 0 < values["fresh_seconds"] <= values["delayed_seconds"] <= values["stale_seconds"]:
+            raise RuntimeError("Telemetry freshness thresholds must be positive and ordered")
+        return cls(**values)
+
+
 class TelemetryValidationError(ValueError):
     def __init__(self, message: str, *, field: str | None = None) -> None:
         super().__init__(message)
@@ -119,7 +137,8 @@ def normalize_telemetry(
 
 def telemetry_freshness(
     recorded_at: object, *, now: datetime | None = None,
-    stale_after_minutes: int = DEFAULT_STALE_AFTER_MINUTES,
+    stale_after_minutes: int | None = None,
+    config: TelemetryFreshnessConfig | None = None,
 ) -> dict[str, Any]:
     current_time = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     try:
@@ -127,8 +146,22 @@ def telemetry_freshness(
     except TelemetryValidationError:
         return {"status": "unavailable", "age_seconds": None, "stale": True}
     age = max(0, int((current_time - stamp).total_seconds()))
-    stale = age > stale_after_minutes * 60
-    return {"status": "stale" if stale else "fresh", "age_seconds": age, "stale": stale}
+    thresholds = config or TelemetryFreshnessConfig.from_environment()
+    if stale_after_minutes is not None:
+        thresholds = TelemetryFreshnessConfig(
+            fresh_seconds=min(thresholds.fresh_seconds, stale_after_minutes * 60),
+            delayed_seconds=stale_after_minutes * 60,
+            stale_seconds=max(thresholds.stale_seconds, stale_after_minutes * 60),
+        )
+    if age <= thresholds.fresh_seconds:
+        status = "fresh"
+    elif age <= thresholds.delayed_seconds:
+        status = "delayed"
+    elif age <= thresholds.stale_seconds:
+        status = "stale"
+    else:
+        status = "offline"
+    return {"status": status, "age_seconds": age, "stale": status in {"stale", "offline"}}
 
 
 @dataclass(frozen=True)
@@ -184,6 +217,79 @@ def calculate_dispatch_readiness(
             f"Ready to charge — {soc:g}% SOC and {charge:g} MW available",
         )
     return Readiness("limited", "Limited — no charging or discharging power is available")
+
+
+def telemetry_alerts(
+    records: list[dict[str, Any]], *, now: datetime | None = None,
+    invalid_received: int = 0,
+) -> list[dict[str, str]]:
+    alerts = []
+    for record in records:
+        freshness = telemetry_freshness(record.get("recorded_at"), now=now)
+        if freshness["status"] in {"stale", "offline"}:
+            alerts.append({
+                "code": "asset_reporting_stopped" if freshness["status"] == "offline" else "telemetry_stale",
+                "severity": "warning",
+                "asset_id": str(record.get("asset_id") or "unknown"),
+                "message": (
+                    "Asset reporting stopped" if freshness["status"] == "offline"
+                    else "Telemetry is stale"
+                ),
+            })
+    if invalid_received:
+        alerts.append({
+            "code": "invalid_telemetry_received", "severity": "warning",
+            "asset_id": "portfolio",
+            "message": f"{invalid_received} invalid telemetry observation(s) were rejected",
+        })
+    return alerts
+
+
+def source_health(
+    records: list[dict[str, Any]], *, now: datetime | None = None,
+    configured_sources: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    latest: dict[str, dict[str, Any]] = {}
+    for record in records:
+        source = str(record.get("telemetry_source") or "").strip()
+        if not source:
+            continue
+        current = latest.get(source)
+        try:
+            stamp = parse_timestamp(record.get("created_at") or record.get("recorded_at"))
+            current_stamp = parse_timestamp(
+                current.get("created_at") or current.get("recorded_at")
+            ) if current else None
+        except TelemetryValidationError:
+            latest[source] = {**record, "_invalid": True}
+            continue
+        if current is None or current_stamp is None or stamp > current_stamp:
+            latest[source] = record
+    sources = sorted(set(configured_sources or []) | set(latest))
+    result = []
+    for source in sources:
+        record = latest.get(source)
+        if not record:
+            state, last_received, age = "never_received", None, None
+        elif record.get("_invalid"):
+            state, last_received, age = "error", record.get("created_at") or record.get("recorded_at"), None
+        else:
+            receipt = record.get("created_at") or record.get("recorded_at")
+            freshness = telemetry_freshness(receipt, now=now)
+            state = {
+                "fresh": "receiving_data",
+                "delayed": "connected",
+                "stale": "stale",
+                "offline": "error",
+            }[freshness["status"]]
+            last_received, age = receipt, freshness["age_seconds"]
+        result.append({
+            "telemetry_source": source,
+            "status": state,
+            "last_received_at": last_received,
+            "age_seconds": age,
+        })
+    return result
 
 
 def generate_development_telemetry(

@@ -230,6 +230,26 @@ def get_latest_telemetry(asset_id: str) -> dict | None:
     return records[0] if records else None
 
 
+def get_latest_telemetry_for_source(telemetry_source: str) -> dict | None:
+    records = _request(
+        "get", "asset_telemetry",
+        params={
+            "select": "asset_id,recorded_at,telemetry_source,is_simulated",
+            "telemetry_source": f"eq.{telemetry_source}",
+            "order": "recorded_at.desc,id.desc", "limit": 1,
+        },
+    )
+    return records[0] if records else None
+
+
+def list_latest_telemetry_by_source() -> list[dict]:
+    """Return latest view rows used to derive real source-health state."""
+    return _list_all(
+        "asset_telemetry",
+        params={"select": "*", "order": "telemetry_source.asc,recorded_at.desc"},
+    )
+
+
 def list_telemetry_history(
     asset_id: str, *, start_at: datetime | None = None,
     end_at: datetime | None = None, limit: int = 500,

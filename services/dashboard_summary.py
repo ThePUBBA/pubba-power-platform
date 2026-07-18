@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import os
 from decimal import Decimal, InvalidOperation
 from typing import Callable
 from zoneinfo import ZoneInfo
@@ -18,6 +19,8 @@ from services.telemetry import (
     TelemetryValidationError,
     calculate_dispatch_readiness,
     normalize_telemetry,
+    source_health,
+    telemetry_alerts,
     telemetry_freshness,
 )
 from supabase import (
@@ -166,7 +169,12 @@ def _telemetry_snapshot(
             continue
         freshness = telemetry_freshness(normalized["recorded_at"], now=now)
         readiness = calculate_dispatch_readiness(normalized, now=now).as_dict()
-        assets.append({**normalized, "freshness": freshness, "readiness": readiness})
+        assets.append({
+            **normalized,
+            "created_at": record.get("created_at"),
+            "freshness": freshness,
+            "readiness": readiness,
+        })
     ready_charge = {
         "ready_to_charge", "ready_charge_discharge",
     }
@@ -186,6 +194,11 @@ def _telemetry_snapshot(
         item["available_discharge_power_mw"] for item in assets
         if item.get("available_discharge_power_mw") is not None
     ]
+    configured_sources = [
+        item.strip()
+        for item in os.getenv("TELEMETRY_CONFIGURED_SOURCES", "").split(",")
+        if item.strip()
+    ]
     return {
         "status": "available" if assets else "unavailable",
         "source_classification": (
@@ -203,6 +216,10 @@ def _telemetry_snapshot(
         "assets_limited": sum(state in {"limited", "telemetry_stale"} for state in states),
         "assets_unavailable": sum(state in {"unavailable", "telemetry_unavailable"} for state in states),
         "assets_stale": sum(item["freshness"]["stale"] for item in assets),
+        "source_health": source_health(
+            assets, now=now, configured_sources=configured_sources
+        ),
+        "alerts": telemetry_alerts(assets, now=now),
         "assets": assets,
     }
 def build_dashboard_summary(

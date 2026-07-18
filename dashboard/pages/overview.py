@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 import plotly.graph_objects as go
 
+from dashboard.api_client import DashboardApiError
 from dashboard.charts import (
     CHART_CONFIG,
     GRAY,
@@ -87,6 +88,11 @@ def _percent_label(value: float | None) -> str:
 
 def _asset_presentation_mode(count: int) -> str:
     return "cards" if count <= 3 else "table"
+
+
+def _selected_asset_id(assets: list[dict], selected: str | None = None) -> str | None:
+    identifiers = [str(item.get("asset_id") or "") for item in assets if item.get("asset_id")]
+    return selected if selected in identifiers else identifiers[0] if identifiers else None
 
 
 def _daily_dispatch_metrics(dispatches: list[dict], zone: str) -> list[dict]:
@@ -396,7 +402,7 @@ def _dispatch_section(st, data: dict, currency: str, zone: str) -> None:
     )
 
 
-def _assets_section(st, payload: dict, currency: str, zone: str) -> None:
+def _assets_section(st, payload: dict, currency: str, zone: str, client) -> None:
     render_section_header(st, "Asset Intelligence")
     assets = payload.get("assets", [])
     if not assets:
@@ -430,7 +436,19 @@ def _assets_section(st, payload: dict, currency: str, zone: str) -> None:
             ("Ready to discharge", f'{telemetry.get("assets_ready_to_discharge", 0):,}'),
             ("Stale telemetry", f'{telemetry.get("assets_stale", 0):,} · {source}'),
         ])
+    for alert in telemetry.get("alerts") or []:
+        st.warning(str(alert.get("message") or "Telemetry requires operator attention."))
     render_summary_grid(st, summary_items)
+    asset_labels = {
+        str(item.get("asset_id")): str(item.get("asset_name") or item.get("asset_id"))
+        for item in assets if item.get("asset_id")
+    }
+    selected_asset = st.selectbox(
+        "Asset detail",
+        options=list(asset_labels),
+        format_func=lambda value: f"{asset_labels[value]} · {value}",
+        help="Select an asset to inspect its latest state and telemetry history.",
+    )
     if _asset_presentation_mode(len(assets)) == "cards":
         cards = []
         for item in assets:
@@ -502,11 +520,20 @@ def _assets_section(st, payload: dict, currency: str, zone: str) -> None:
         } for item in assets]
         st.dataframe(rows, width="stretch", hide_index=True)
 
-    history = payload.get("telemetry_history") or []
+    history = []
+    history_error = None
+    if selected_asset and selected_asset in telemetry_assets:
+        try:
+            history = client.get_telemetry_history(selected_asset)
+        except DashboardApiError as exc:
+            history_error = str(exc)
+            history = [
+                item for item in payload.get("telemetry_history") or []
+                if str(item.get("asset_id") or "") == selected_asset
+            ]
     if history:
-        if payload.get("telemetry_error"):
+        if history_error or payload.get("telemetry_error"):
             st.warning("Telemetry history is temporarily unavailable; latest asset state remains visible.")
-        selected_asset = str(history[0].get("asset_id") or "Asset")
         if any(item.get("is_simulated") for item in history):
             st.caption("Telemetry history includes clearly labeled simulated development data.")
         latest = telemetry_assets.get(selected_asset) or {}
@@ -522,7 +549,7 @@ def _assets_section(st, payload: dict, currency: str, zone: str) -> None:
             width="stretch",
             config=CHART_CONFIG,
         )
-    elif telemetry.get("status") == "available":
+    elif selected_asset in telemetry_assets:
         st.caption("Telemetry history is not available; latest asset observations remain visible.")
 
 
@@ -598,7 +625,7 @@ def _render_live(st, client) -> None:
     _market_section(st, data, currency, zone)
     _performance_section(st, data, currency, zone)
     _dispatch_section(st, data, currency, zone)
-    _assets_section(st, payload, currency, zone)
+    _assets_section(st, payload, currency, zone, client)
 
     render_section_header(st, "Platform Capabilities")
     st.caption("Available today")
@@ -627,14 +654,23 @@ def _render_live(st, client) -> None:
     api_status = str(status.get("api") or "unknown")
     market_status = str(status.get("market_data") or "unknown")
     simulation_status = str(status.get("simulation_engine") or "unknown")
-    render_system_status(st, [
+    system_statuses = [
         ("API", api_status.title(), api_status == "connected", f"Checked {checked} · {payload.get('latency_ms', 0):.0f} ms request latency"),
         ("CAISO", market_status.replace("_", " ").title(), market_status == "connected", f"Latest interval {format_timestamp(metadata.get('market_updated_at'), zone)}"),
         ("Dashboard Summary", "Available", True, f"Generated {format_timestamp(metadata.get('generated_at'), zone)}"),
         ("Simulation Engine", simulation_status.title(), simulation_status == "ready", "Historical scenario workflow"),
         ("Reporting Timezone", zone, True, "Applied to dashboard reporting dates"),
         ("Platform Version", "v1.0.0", True, "PUBBA Power operations console"),
-    ])
+    ]
+    for source in (data.get("telemetry") or {}).get("source_health") or []:
+        source_status = str(source.get("status") or "never_received")
+        system_statuses.append((
+            f'Telemetry · {source.get("telemetry_source") or "Unknown source"}',
+            source_status.replace("_", " ").title(),
+            source_status in {"receiving_data", "connected"},
+            f'Last received {format_timestamp(source.get("last_received_at"), zone)}',
+        ))
+    render_system_status(st, system_statuses)
     render_data_freshness(st, format_timestamp(metadata.get("data_freshness_at"), zone))
 
 

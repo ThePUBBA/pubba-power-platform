@@ -247,6 +247,7 @@ def test_telemetry_post_validates_and_persists_when_enabled(monkeypatch):
     monkeypatch.setenv("TELEMETRY_WRITES_ENABLED", "true")
     monkeypatch.setenv("TELEMETRY_WRITE_TOKEN", "secret")
     monkeypatch.setattr(main, "create_telemetry", lambda record: record)
+    monkeypatch.setattr(main, "get_latest_telemetry_for_source", lambda source: None)
     response = TestClient(main.app).post(
         "/telemetry", json=telemetry(), headers={"X-Telemetry-Key": "secret"}
     )

@@ -28,6 +28,8 @@ from supabase import (
     get_asset_performance,
     get_asset,
     get_latest_telemetry,
+    get_latest_telemetry_for_source,
+    list_latest_telemetry_by_source,
     list_assets,
     list_dispatch_events,
     list_portfolio_latest_telemetry,
@@ -43,8 +45,11 @@ from services.telemetry import (
     TelemetryValidationError,
     calculate_dispatch_readiness,
     normalize_telemetry,
+    source_health,
     telemetry_freshness,
 )
+from services.telemetry_adapters import GenericJsonTelemetryAdapter
+from services.telemetry_ingestion import configured_batch_limit, ingest_batch
 
 
 SERVICE_NAME = "PUBBA Power API"
@@ -250,7 +255,11 @@ class TelemetryCreateRequest(BaseModel):
     operational_status: Optional[str] = None
     availability_status: Optional[str] = None
     telemetry_source: str = Field(min_length=1)
-    is_simulated: bool = False
+    is_simulated: bool
+
+
+class TelemetryBatchRequest(BaseModel):
+    observations: list[dict]
 
 
 class ReportPeriodResponse(BaseModel):
@@ -644,6 +653,19 @@ def create_app() -> FastAPI:
             ],
         }
 
+    @app.get("/telemetry/sources/health")
+    def telemetry_sources_health():
+        configured = [
+            item.strip()
+            for item in os.getenv("TELEMETRY_CONFIGURED_SOURCES", "").split(",")
+            if item.strip()
+        ]
+        try:
+            records = list_latest_telemetry_by_source()
+        except SupabaseError as exc:
+            _raise_telemetry_api_error(exc)
+        return {"sources": source_health(records, configured_sources=configured)}
+
     @app.post("/telemetry", status_code=201)
     def add_telemetry(
         request: TelemetryCreateRequest,
@@ -655,13 +677,58 @@ def create_app() -> FastAPI:
                 "Telemetry writes are disabled or not authorized",
             )
         try:
-            normalized = normalize_telemetry(request.model_dump())
-            created = create_telemetry(normalized)
+            result = ingest_batch(
+                [request.model_dump()], adapter=GenericJsonTelemetryAdapter(),
+                persist=create_telemetry,
+                source_latest=get_latest_telemetry_for_source,
+                max_batch_size=1,
+            )
         except TelemetryValidationError as exc:
             raise ApiError(422, "invalid_telemetry", str(exc), field=exc.field) from exc
         except SupabaseError as exc:
             _raise_telemetry_api_error(exc)
-        return _telemetry_response(created)
+        if result["rejected"]:
+            rejection = result["rejected_records"][0]
+            status_code = 404 if rejection["code"] == "unknown_asset" else 422
+            raise ApiError(
+                status_code, rejection["code"], rejection["message"],
+                field=rejection.get("field"),
+            )
+        if result["duplicate"]:
+            try:
+                response = _telemetry_response(get_latest_telemetry(request.asset_id))
+            except SupabaseError as exc:
+                _raise_telemetry_api_error(exc)
+            return {**response, "ingestion_status": "duplicate"}
+        record = result["accepted_records"][0]["record"]
+        return {
+            **_telemetry_response(record),
+            "ingestion_status": "accepted",
+            "ingestion_id": result["ingestion_id"],
+        }
+
+    @app.post("/telemetry/batch")
+    def add_telemetry_batch(
+        request: TelemetryBatchRequest,
+        x_telemetry_key: Optional[str] = Header(default=None, alias="X-Telemetry-Key"),
+    ):
+        if not _telemetry_writes_allowed(x_telemetry_key):
+            raise ApiError(
+                403, "telemetry_writes_disabled",
+                "Telemetry writes are disabled or not authorized",
+            )
+        try:
+            return ingest_batch(
+                request.observations,
+                adapter=GenericJsonTelemetryAdapter(),
+                persist=create_telemetry,
+                source_latest=get_latest_telemetry_for_source,
+                max_batch_size=configured_batch_limit(),
+            )
+        except TelemetryValidationError as exc:
+            raise ApiError(422, "invalid_telemetry", str(exc), field=exc.field) from exc
+        except SupabaseError as exc:
+            _raise_telemetry_api_error(exc)
 
     @app.get("/dispatch-events")
     def dispatch_events(

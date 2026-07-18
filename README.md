@@ -15,11 +15,17 @@ steps and the audited asset schema are documented in
 `docs/architecture/ADR-004-battery-telemetry-foundation.md`.
 
 Telemetry routes include the latest observation and history for one asset, the latest
-observation per portfolio asset, and a disabled-by-default ingestion endpoint. Enable
-writes only for authenticated ingestion with `TELEMETRY_WRITES_ENABLED=true` and a
-secret `TELEMETRY_WRITE_TOKEN` supplied as `X-Telemetry-Key`. The development generator
-is separately gated by `PUBBA_ENABLE_SIMULATED_TELEMETRY=true` and must never be enabled
-in production.
+observation per portfolio asset, source health, secure single-record ingestion, and
+partial-success batch ingestion. Enable writes only with
+`TELEMETRY_WRITES_ENABLED=true` and a secret `TELEMETRY_WRITE_TOKEN` supplied as
+`X-Telemetry-Key`. Batch size and freshness thresholds use the `TELEMETRY_*`
+configuration documented in `.env.example`. The provider-neutral adapter architecture,
+payloads, idempotency, source health, credential rotation, and future BMS/SCADA adapter
+process are documented in
+`docs/architecture/ADR-005-secure-telemetry-ingestion.md`.
+
+The development generator is separately gated by
+`PUBBA_ENABLE_SIMULATED_TELEMETRY=true` and must never be enabled in production.
 
 ## Repository
 
