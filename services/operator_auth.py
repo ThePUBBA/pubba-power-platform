@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import logging
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
@@ -14,6 +15,7 @@ from jwt import PyJWKClient
 
 ROLES = ("viewer", "operator", "approver", "admin")
 AUTH_MODES = ("off", "shadow", "enforce")
+logger = logging.getLogger(__name__)
 ROLE_PERMISSIONS = {
     "viewer": frozenset({"recommendations:read"}),
     "operator": frozenset({"recommendations:read", "recommendations:capture", "recommendations:acknowledge", "recommendations:link_simulation"}),
@@ -82,6 +84,10 @@ def _jwks_client(issuer: str) -> PyJWKClient:
         if not jwks_uri.startswith("https://"):
             raise OperatorAuthError("OIDC discovery did not provide a secure JWKS URI")
     except (requests.RequestException, ValueError, TypeError) as exc:
+        logger.warning(
+            "Operator identity provider unavailable",
+            extra={"security_event": "oidc_discovery_failed"},
+        )
         raise OperatorAuthError("OIDC discovery is unavailable") from exc
     return PyJWKClient(
         jwks_uri, cache_jwk_set=True, lifespan=600
@@ -101,6 +107,10 @@ def verify_oidc_token(token: str) -> VerifiedIdentity:
             options={"require": ["exp", "iat", "iss", "sub"]},
         )
     except jwt.PyJWTError as exc:
+        logger.warning(
+            "Operator credential verification failed",
+            extra={"security_event": "oidc_token_verification_failed"},
+        )
         raise OperatorAuthError("Invalid or expired operator credential") from exc
     subject = str(claims.get("sub") or "").strip()
     if not subject:

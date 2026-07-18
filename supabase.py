@@ -476,7 +476,18 @@ def get_operator_portfolio_access(operator_id: str, portfolio_id: str) -> dict |
 
 def transactional_operator_action(function_name: str, arguments: dict) -> dict:
     """Execute an audited business mutation through one Postgres transaction."""
-    result = _request("post", f"rpc/{function_name}", json_body=arguments)
+    try:
+        result = _request("post", f"rpc/{function_name}", json_body=arguments)
+    except SupabaseError as exc:
+        logger.warning(
+            "Transactional operator action failed",
+            extra={
+                "security_event": "transactional_operator_action_failed",
+                "rpc": function_name,
+                "error_code": exc.error_code,
+            },
+        )
+        raise
     if isinstance(result, list):
         return result[0] if result else {}
     return result

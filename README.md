@@ -50,6 +50,8 @@ The staged OIDC, first-Admin, portfolio access, transactional audit, and rollbac
 procedure is documented in `docs/deployment/operator-identity-rollout.md`.
 The manual production acceptance procedure, verification SQL, evidence gates, and
 operator checklist are in `docs/deployment/production-identity-acceptance-runbook.md`.
+Observed production acceptance evidence and current go/no-go blockers are recorded in
+`docs/deployment/production-identity-acceptance-report.md`.
 
 ## Repository
 

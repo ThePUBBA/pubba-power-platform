@@ -558,24 +558,48 @@ def create_app() -> FastAPI:
 
     def resolve_operator(authorization: str | None) -> OperatorPrincipal:
         if not authorization or not authorization.startswith("Bearer "):
+            logger.info(
+                "Operator authentication required",
+                extra={"security_event": "authentication_missing"},
+            )
             raise ApiError(401, "authentication_required", "Operator authentication is required")
         token = authorization.removeprefix("Bearer ").strip()
         if not token:
+            logger.info(
+                "Operator authentication required",
+                extra={"security_event": "authentication_missing"},
+            )
             raise ApiError(401, "authentication_required", "Operator authentication is required")
         try:
             identity = verify_oidc_token(token)
             record = get_operator_by_subject(identity.subject)
         except OperatorAuthError as exc:
+            logger.warning(
+                "Operator authentication rejected",
+                extra={"security_event": "authentication_invalid"},
+            )
             raise ApiError(401, "invalid_operator_credential", str(exc)) from exc
         except SupabaseError as exc:
             _raise_supabase_api_error(exc)
         if not record:
+            logger.warning(
+                "Operator is not provisioned",
+                extra={"security_event": "operator_unknown"},
+            )
             raise ApiError(403, "operator_not_provisioned", "Operator access is not provisioned")
         try:
             principal = principal_from_record(record)
         except OperatorAuthError as exc:
+            logger.warning(
+                "Operator profile rejected",
+                extra={"security_event": "operator_role_invalid"},
+            )
             raise ApiError(403, "operator_access_denied", "Operator access is not authorized") from exc
         if principal.status != "active":
+            logger.warning(
+                "Inactive operator rejected",
+                extra={"security_event": "operator_inactive"},
+            )
             raise ApiError(403, "operator_inactive", "Operator access is inactive")
         return principal
 
@@ -627,6 +651,14 @@ def create_app() -> FastAPI:
         except SupabaseError as exc:
             _raise_supabase_api_error(exc)
         if not assignment:
+            logger.warning(
+                "Cross-portfolio operator access rejected",
+                extra={
+                    "security_event": "portfolio_access_denied",
+                    "operator_id": principal.operator_id,
+                    "portfolio_id": portfolio_id,
+                },
+            )
             raise ApiError(404, "portfolio_not_found", "Portfolio was not found")
         role = str(assignment.get("role_override") or principal.role)
         effective = OperatorPrincipal(
@@ -635,6 +667,15 @@ def create_app() -> FastAPI:
             role=role, status=principal.status,
         )
         if not effective.can(permission):
+            logger.warning(
+                "Portfolio permission rejected",
+                extra={
+                    "security_event": "portfolio_permission_denied",
+                    "operator_id": principal.operator_id,
+                    "portfolio_id": portfolio_id,
+                    "permission": permission,
+                },
+            )
             raise ApiError(403, "operator_forbidden", "Operator is not authorized for this action")
         return role
 
@@ -650,6 +691,14 @@ def create_app() -> FastAPI:
         allowed = {str(item.get("portfolio_id")) for item in assignments if item.get("active", True)}
         if requested_portfolio_id:
             if requested_portfolio_id not in allowed:
+                logger.warning(
+                    "Cross-portfolio read rejected",
+                    extra={
+                        "security_event": "portfolio_access_denied",
+                        "operator_id": principal.operator_id,
+                        "portfolio_id": requested_portfolio_id,
+                    },
+                )
                 raise ApiError(404, "portfolio_not_found", "Portfolio was not found")
             return requested_portfolio_id
         if len(allowed) == 1:

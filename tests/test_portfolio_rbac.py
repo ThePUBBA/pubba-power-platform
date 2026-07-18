@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 import main
 import services.operator_auth as operator_auth
+import supabase
 from dashboard.api_client import Only1ApiClient
 from services.operator_auth import OperatorAuthError, operator_auth_mode, verify_oidc_token
 from supabase import SupabaseError
@@ -36,6 +37,26 @@ def test_valid_oidc_identity_uses_verified_subject(monkeypatch):
     identity = verify_oidc_token("verified-token")
     assert identity.subject == "stable-provider-subject"
     assert identity.email == "operator@pubba.test"
+
+
+def test_oidc_failure_logging_is_sanitized(monkeypatch, caplog):
+    secret_token = "secret.jwt.value"
+    monkeypatch.setenv("OPERATOR_OIDC_ISSUER", "https://issuer.example")
+    monkeypatch.setenv("OPERATOR_OIDC_AUDIENCE", "pubba-api")
+    monkeypatch.setattr(
+        operator_auth, "_jwks_client",
+        lambda issuer: SimpleNamespace(get_signing_key_from_jwt=lambda token: SimpleNamespace(key="key")),
+    )
+    monkeypatch.setattr(
+        operator_auth.jwt, "decode",
+        lambda *args, **kwargs: (_ for _ in ()).throw(jwt.InvalidSignatureError()),
+    )
+    with pytest.raises(OperatorAuthError):
+        verify_oidc_token(secret_token)
+    assert "oidc_token_verification_failed" in [
+        getattr(record, "security_event", "") for record in caplog.records
+    ]
+    assert secret_token not in caplog.text
 
 
 @pytest.mark.parametrize(
@@ -141,6 +162,23 @@ def test_transactional_rpc_failure_does_not_fall_back_to_business_write(monkeypa
     )
     assert response.status_code == 502
     assert persisted.get("acknowledged_at") is None
+
+
+def test_transactional_failure_logging_excludes_arguments(monkeypatch, caplog):
+    monkeypatch.setattr(
+        supabase, "_request",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            SupabaseError("failed", error_code="transaction_failed")
+        ),
+    )
+    with pytest.raises(SupabaseError):
+        supabase.transactional_operator_action(
+            "pubba_audited_operator_update", {"p_changes": {"secret": "do-not-log"}}
+        )
+    assert "transactional_operator_action_failed" in [
+        getattr(record, "security_event", "") for record in caplog.records
+    ]
+    assert "do-not-log" not in caplog.text
 
 
 def test_dashboard_portfolio_context_is_sent_to_backend():
