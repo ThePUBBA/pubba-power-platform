@@ -1,7 +1,9 @@
 # Production identity acceptance report
 
-Date: 2026-07-18  
-Repository baseline: `3235702627149bbf5aa81674de47e3a4ab543245`  
+Date: 2026-07-18
+
+Repository baseline: `3235702627149bbf5aa81674de47e3a4ab543245`
+
 Decision: **NO-GO for enforce mode and recommendation writes**
 
 This report records only evidence observable from the authorized local and public production interfaces. No migration, identity, assignment, configuration flag, or production record was changed. No token or secret was collected.
