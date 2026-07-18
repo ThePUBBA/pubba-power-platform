@@ -553,6 +553,59 @@ def _assets_section(st, payload: dict, currency: str, zone: str, client) -> None
         st.caption("Telemetry history is not available; latest asset observations remain visible.")
 
 
+def _opportunities_section(st, payload: dict, currency: str) -> None:
+    render_section_header(st, "Market Opportunities")
+    result = payload.get("recommendations")
+    if not result:
+        message = payload.get("recommendation_error") or "Market opportunity analysis is unavailable."
+        st.warning(message)
+        st.caption("No operational recommendation is issued while required market inputs are unavailable.")
+        return
+    recommendations = result.get("recommendations") or []
+    best_id = result.get("best_candidate_asset_id")
+    best = next((item for item in recommendations if item.get("asset_id") == best_id), None)
+    if best:
+        economics = best.get("estimated_economics") or {}
+        readiness = best.get("operational_readiness") or {}
+        render_summary_grid(st, [
+            ("Highest score", f'{best.get("opportunity_score", 0)}/100'),
+            ("Best candidate", str(best.get("asset_name") or best.get("asset_id"))),
+            ("Market condition", str(best.get("recommendation") or "Unavailable")),
+            ("Estimated opportunity value", format_currency(economics.get("estimated_gross_profit"), currency) if economics else "Not available"),
+            ("Operational readiness", str(readiness.get("explanation") or "Operational readiness awaiting live telemetry.")),
+        ])
+        if st.button(
+            "Prepare Simulation Inputs", key="prepare_recommendation_simulation",
+            help="Copies this advisory scenario into the Simulations form without running it.",
+        ):
+            st.session_state["recommendation_simulation_inputs"] = best.get("simulation_inputs") or {}
+            st.success("Simulation inputs prepared. Open Simulations to review and run them manually.")
+    st.caption("MARKET OPPORTUNITY is pricing analysis. OPERATIONAL READINESS requires current asset telemetry.")
+    for item in recommendations:
+        economics = item.get("estimated_economics") or {}
+        readiness = item.get("operational_readiness") or {}
+        with st.expander(
+            f'{item.get("asset_name") or item.get("asset_id")} · '
+            f'{item.get("recommendation")} · {item.get("opportunity_score", 0)}/100'
+        ):
+            st.markdown(f'**MARKET OPPORTUNITY** — {item.get("explanation") or "Unavailable"}')
+            st.markdown(f'**OPERATIONAL READINESS** — {readiness.get("explanation") or "Operational readiness awaiting live telemetry."}')
+            if economics:
+                render_summary_grid(st, [
+                    ("Current price", f'{format_currency(economics.get("current_market_price_per_mwh"), currency)}/MWh'),
+                    ("Break-even price", f'{format_currency(economics.get("break_even_discharge_price_per_mwh"), currency)}/MWh'),
+                    ("Estimated spread", f'{format_currency(economics.get("estimated_spread_per_mwh"), currency)}/MWh'),
+                    ("Estimated charging cost", format_currency(economics.get("estimated_charging_cost"), currency)),
+                    ("Estimated discharge revenue", format_currency(economics.get("estimated_discharge_revenue"), currency)),
+                    ("Estimated gross profit", format_currency(economics.get("estimated_gross_profit"), currency)),
+                ])
+            for driver in item.get("primary_drivers") or []:
+                st.caption(f"• {driver}")
+            for risk in item.get("risks") or []:
+                st.caption(f"Risk · {risk}")
+            st.caption(str(item.get("advisory_notice") or "Advisory analysis only."))
+
+
 def _render_live(st, client) -> None:
     control, action = st.columns([5, 1])
     with control:
@@ -622,6 +675,7 @@ def _render_live(st, client) -> None:
         {"label": "Total Discharged Energy", "value": format_energy(total_discharge), "subtitle": "Complete dispatch records", "icon": "⇥"},
         {"label": "Last Successful Sync", "value": format_timestamp(kpis.get("last_api_sync_at") or refreshed_at, zone), "subtitle": f"Request latency · {payload.get('latency_ms', 0):.0f} ms", "icon": "◷", "tone": "positive"},
     ])
+    _opportunities_section(st, payload, currency)
     _market_section(st, data, currency, zone)
     _performance_section(st, data, currency, zone)
     _dispatch_section(st, data, currency, zone)

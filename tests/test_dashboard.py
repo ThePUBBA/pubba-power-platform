@@ -119,6 +119,21 @@ def test_asset_client_uses_existing_fastapi_route():
     assert client.last_latency_ms is not None
 
 
+def test_recommendation_client_requires_advisory_contract():
+    payload = {"advisory_only": True, "recommendations": [{"asset_id": "BAT-001"}]}
+    session = Session(Response(payload))
+    client = Only1ApiClient("https://api.example.test", session=session)
+
+    assert client.get_portfolio_recommendations() == payload
+    assert session.calls[0][1] == "https://api.example.test/recommendations/portfolio"
+    malformed = Only1ApiClient(
+        "https://api.example.test",
+        session=Session(Response({"advisory_only": False, "recommendations": []})),
+    )
+    with pytest.raises(DashboardApiError, match="invalid market recommendations"):
+        malformed.get_portfolio_recommendations()
+
+
 @pytest.mark.parametrize(
     ("error", "code"),
     [(requests.Timeout(), "timeout"), (requests.ConnectionError(), "connection_error")],

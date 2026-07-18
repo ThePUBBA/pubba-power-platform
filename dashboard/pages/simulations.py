@@ -14,6 +14,7 @@ from dashboard.formatting import as_decimal, format_currency, format_energy, for
 
 
 def render(st, client: Only1ApiClient) -> None:
+    prepared = st.session_state.get("recommendation_simulation_inputs") or {}
     render_page_header(
         st, "Storage Simulations",
         "Evaluate calculated storage economics against historical CAISO market prices.",
@@ -23,27 +24,31 @@ def render(st, client: Only1ApiClient) -> None:
         st,
         "Simulation outputs are calculated estimates and are not live dispatch instructions.",
     )
+    if prepared:
+        st.info("Market-opportunity inputs are prepared below. Review every assumption before running the simulation.")
     render_section_header(st, "Simulation Parameters")
     with st.form("simulation"):
         market_col, asset_col = st.columns(2)
         with market_col:
             st.caption("MARKET INPUTS")
-            location = st.text_input("CAISO pricing node", "TH_NP15_GEN-APND", help="The CAISO pricing node used for historical LMP data.")
-            market = st.selectbox("Market type", ["RTM", "DAM", "HASP", "RTPD"], help="CAISO market run used for the price series.")
+            location = st.text_input("CAISO pricing node", str(prepared.get("location") or "TH_NP15_GEN-APND"), help="The CAISO pricing node used for historical LMP data.")
+            market_options = ["RTM", "DAM", "HASP", "RTPD"]
+            prepared_market = str(prepared.get("market") or "RTM")
+            market = st.selectbox("Market type", market_options, index=market_options.index(prepared_market) if prepared_market in market_options else 0, help="CAISO market run used for the price series.")
             simulation_date = st.date_input("Historical trade date", help="The historical date evaluated by the simulation.")
         with asset_col:
             st.caption("STORAGE ASSUMPTIONS")
-            power_mw = st.number_input("Power capacity (MW)", min_value=0.01, value=10.0, help="Maximum charge or discharge power.")
-            duration_hours = st.number_input("Duration (hours)", min_value=0.01, value=4.0)
-            efficiency = st.number_input("Round-trip efficiency", min_value=0.01, max_value=1.0, value=0.8, format="%.2f")
+            power_mw = st.number_input("Power capacity (MW)", min_value=0.01, value=max(0.01, float(prepared.get("power_mw") or 10.0)), help="Maximum charge or discharge power.")
+            duration_hours = st.number_input("Duration (hours)", min_value=0.01, value=max(0.01, float(prepared.get("duration_hours") or 4.0)))
+            efficiency = st.number_input("Round-trip efficiency", min_value=0.01, max_value=1.0, value=float(prepared.get("round_trip_efficiency") or 0.8), format="%.2f")
             cycles = st.number_input("Cycles", min_value=0.01, value=1.0)
         cost_a, cost_b, identity = st.columns(3)
         with cost_a:
             storage_fee = st.number_input("Storage fee (USD/MWh)", min_value=0.0)
         with cost_b:
-            variable_om = st.number_input("Variable O&M (USD/MWh)", min_value=0.0)
+            variable_om = st.number_input("Variable O&M (USD/MWh)", min_value=0.0, value=max(0.0, float(prepared.get("variable_om_per_mwh") or 0)))
         with identity:
-            asset_id = st.text_input("Asset ID (optional)", help="Associates the calculated result with an existing asset when supplied.")
+            asset_id = st.text_input("Asset ID (optional)", value=str(prepared.get("asset_id") or ""), help="Associates the calculated result with an existing asset when supplied.")
         submitted = st.form_submit_button("Run Historical Simulation", type="primary", width="stretch")
 
     if not submitted:

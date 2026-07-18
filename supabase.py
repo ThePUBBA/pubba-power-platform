@@ -405,6 +405,12 @@ def get_asset_performance() -> list[dict]:
                 "status": str(asset.get("status") or ""),
                 "power_mw": _safe_number(asset.get("power_mw"), "power_mw"),
                 "energy_mwh": _safe_number(asset.get("energy_mwh"), "energy_mwh"),
+                "duration_hours": _safe_number(
+                    asset.get("duration_hours"), "duration_hours"
+                ),
+                "lease_cost_monthly": _safe_number(
+                    asset.get("lease_cost_monthly"), "lease_cost_monthly"
+                ),
                 "location": str(asset.get("location") or ""),
                 "total_dispatches": dispatch_count,
                 "total_revenue": float(values.get("total_revenue", 0.0)),

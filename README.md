@@ -31,6 +31,12 @@ configured, and production telemetry writes remain disabled.
 The development generator is separately gated by
 `PUBBA_ENABLE_SIMULATED_TELEMETRY=true` and must never be enabled in production.
 
+Dispatch recommendations are advisory, deterministic market-opportunity analysis. They
+never execute dispatches, transactions, simulations, or telemetry writes. The scoring,
+economics, missing operational inputs, safety behavior, API contracts, simulation
+handoff, and deferred history design are documented in
+`docs/architecture/ADR-007-dispatch-recommendations.md`.
+
 ## Repository
 
 The PUBBA Power platform source is hosted at [ThePubba/pubba-power-platform](https://github.com/ThePubba/pubba-power-platform).

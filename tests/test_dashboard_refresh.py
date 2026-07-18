@@ -32,6 +32,11 @@ class FailedClient(Client):
         raise DashboardApiError("temporary failure")
 
 
+class RecommendationClient(Client):
+    def get_portfolio_recommendations(self):
+        return {"advisory_only": True, "recommendations": [{"asset_id": "BAT-001"}]}
+
+
 def test_refresh_stores_success_and_latency():
     state = {}
     payload, error = refresh_dashboard_data(state, Client())
@@ -50,6 +55,13 @@ def test_refresh_failure_preserves_previous_success():
 
     assert payload is previous
     assert error == "temporary failure"
+
+
+def test_refresh_loads_recommendations_without_direct_storage_access():
+    payload, error = refresh_dashboard_data({}, RecommendationClient())
+
+    assert error is None
+    assert payload["recommendations"]["advisory_only"] is True
 
 
 def test_single_point_trend_uses_categorical_axis():

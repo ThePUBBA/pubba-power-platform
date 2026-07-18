@@ -27,6 +27,8 @@ def refresh_dashboard_data(
 
     telemetry_history = []
     telemetry_error = None
+    recommendation_error = None
+    recommendations = dashboard.get("recommendations")
     telemetry_assets = (dashboard.get("telemetry") or {}).get("assets") or []
     if telemetry_assets and hasattr(client, "get_telemetry_history"):
         try:
@@ -36,11 +38,19 @@ def refresh_dashboard_data(
             total_latency += client.last_latency_ms or 0.0
         except DashboardApiError as exc:
             telemetry_error = str(exc)
+    if recommendations is None and hasattr(client, "get_portfolio_recommendations"):
+        try:
+            recommendations = client.get_portfolio_recommendations()
+            total_latency += client.last_latency_ms or 0.0
+        except DashboardApiError as exc:
+            recommendation_error = str(exc)
     payload = {
         "dashboard": dashboard,
         "assets": assets,
         "telemetry_history": telemetry_history,
         "telemetry_error": telemetry_error,
+        "recommendations": recommendations,
+        "recommendation_error": recommendation_error,
         "latency_ms": total_latency,
         "refreshed_at": datetime.now(timezone.utc).isoformat(),
     }

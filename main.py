@@ -51,6 +51,7 @@ from services.telemetry import (
 from services.telemetry_adapters import GenericJsonTelemetryAdapter
 from services.telemetry_ingestion import configured_batch_limit, ingest_batch
 from services.telemetry_sources import merge_source_runtime_health, source_runtime_registry
+from services.recommendations import rank_portfolio_recommendations
 
 
 SERVICE_NAME = "PUBBA Power API"
@@ -552,9 +553,24 @@ def create_app() -> FastAPI:
         include_market: bool = Query(default=True),
     ):
         try:
-            return build_dashboard_summary(
+            dashboard = build_dashboard_summary(
                 timezone_name=timezone_name, include_market=include_market
             )
+            try:
+                dashboard["recommendations"] = current_recommendations(
+                    dashboard=dashboard
+                )
+            except ApiError:
+                dashboard["recommendations"] = {
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "advisory_only": True,
+                    "autonomous_dispatch": False,
+                    "market_status": "unavailable",
+                    "highest_opportunity_score": 0,
+                    "best_candidate_asset_id": None,
+                    "recommendations": [],
+                }
+            return dashboard
         except PortfolioSummaryError as exc:
             raise ApiError(400, exc.code, str(exc), field=exc.field) from exc
         except SupabaseError as exc:
@@ -671,6 +687,42 @@ def create_app() -> FastAPI:
                 health, source_runtime_registry.snapshot()
             )
         }
+
+    def current_recommendations(*, dashboard: dict | None = None) -> dict:
+        try:
+            dashboard = dashboard or build_dashboard_summary(include_market=True)
+            assets = get_asset_performance()
+        except SupabaseError as exc:
+            _raise_supabase_api_error(exc)
+        metadata = dashboard.get("metadata") or {}
+        market = {
+            "status": (dashboard.get("status") or {}).get("market_data"),
+            "location": metadata.get("market_location"),
+            "market": metadata.get("market_type"),
+            "current_price_per_mwh": (dashboard.get("kpis") or {}).get(
+                "current_market_price_per_mwh"
+            ),
+            "price_points": (dashboard.get("series") or {}).get("market_prices") or [],
+            "updated_at": metadata.get("market_updated_at"),
+        }
+        telemetry = (dashboard.get("telemetry") or {}).get("assets") or []
+        return rank_portfolio_recommendations(
+            assets=assets, market=market, telemetry_records=telemetry
+        )
+
+    @app.get("/recommendations/portfolio")
+    def portfolio_recommendations():
+        return current_recommendations()
+
+    @app.get("/recommendations/assets/{asset_id}")
+    def asset_recommendation(asset_id: str):
+        result = current_recommendations()
+        recommendation = next((
+            item for item in result["recommendations"] if item["asset_id"] == asset_id
+        ), None)
+        if recommendation is None:
+            raise ApiError(404, "asset_not_found", "Asset was not found", field="asset_id")
+        return recommendation
 
     @app.post("/telemetry", status_code=201)
     def add_telemetry(

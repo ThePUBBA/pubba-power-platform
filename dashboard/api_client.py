@@ -139,6 +139,19 @@ class Only1ApiClient:
             )
         return [item for item in payload["records"] if isinstance(item, dict)]
 
+    def get_portfolio_recommendations(self) -> dict:
+        payload = self._request("get", "/recommendations/portfolio")
+        if (
+            not isinstance(payload, dict)
+            or not isinstance(payload.get("recommendations"), list)
+            or payload.get("advisory_only") is not True
+        ):
+            raise DashboardApiError(
+                "The backend returned invalid market recommendations.",
+                code="invalid_response",
+            )
+        return payload
+
     def _request(self, method: str, path: str, **kwargs: Any) -> Any:
         started = perf_counter()
         try:
