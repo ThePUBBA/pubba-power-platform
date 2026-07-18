@@ -128,6 +128,17 @@ class Only1ApiClient:
             )
         return payload
 
+    def get_telemetry_history(self, asset_id: str, *, limit: int = 500) -> list[dict]:
+        payload = self._request(
+            "get", f"/telemetry/assets/{asset_id}/history", params={"limit": limit}
+        )
+        if not isinstance(payload, dict) or not isinstance(payload.get("records"), list):
+            raise DashboardApiError(
+                "The backend returned invalid telemetry history.",
+                code="invalid_response",
+            )
+        return [item for item in payload["records"] if isinstance(item, dict)]
+
     def _request(self, method: str, path: str, **kwargs: Any) -> Any:
         started = perf_counter()
         try:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hmac
 import io
 import logging
 import os
@@ -22,11 +23,15 @@ from supabase import (
     aggregate_report,
     check_supabase_connectivity,
     create_asset,
+    create_telemetry,
     derive_idempotency_key,
     get_asset_performance,
     get_asset,
+    get_latest_telemetry,
     list_assets,
     list_dispatch_events,
+    list_portfolio_latest_telemetry,
+    list_telemetry_history,
     persist_simulation,
     update_asset,
 )
@@ -34,6 +39,12 @@ from caiso import CaisoOasisError, fetch_lmp_data
 from simulation import StorageSimulationError, simulate_storage_profit
 from services.portfolio_summary import PortfolioSummaryError, build_portfolio_summary
 from services.dashboard_summary import build_dashboard_summary
+from services.telemetry import (
+    TelemetryValidationError,
+    calculate_dispatch_readiness,
+    normalize_telemetry,
+    telemetry_freshness,
+)
 
 
 SERVICE_NAME = "PUBBA Power API"
@@ -227,6 +238,21 @@ class AssetUpdateRequest(BaseModel):
     status: Optional[str] = None
 
 
+class TelemetryCreateRequest(BaseModel):
+    asset_id: str = Field(min_length=1)
+    recorded_at: datetime
+    state_of_charge_pct: Optional[float] = None
+    current_power_mw: Optional[float] = None
+    available_charge_power_mw: Optional[float] = None
+    available_discharge_power_mw: Optional[float] = None
+    available_energy_mwh: Optional[float] = None
+    temperature_c: Optional[float] = None
+    operational_status: Optional[str] = None
+    availability_status: Optional[str] = None
+    telemetry_source: str = Field(min_length=1)
+    is_simulated: bool = False
+
+
 class ReportPeriodResponse(BaseModel):
     period_start: str
     period_end: str
@@ -344,6 +370,17 @@ def _raise_supabase_api_error(exc: SupabaseError) -> None:
     ) from exc
 
 
+def _raise_telemetry_api_error(exc: SupabaseError) -> None:
+    if exc.error_code == "missing_asset":
+        _raise_supabase_api_error(exc)
+    raise ApiError(
+        503,
+        "telemetry_storage_unavailable",
+        "Telemetry storage is unavailable",
+        upstream_service="Supabase",
+    ) from exc
+
+
 def _validate_date_range(start_date: date | None, end_date: date | None) -> None:
     if start_date and end_date and start_date > end_date:
         raise ApiError(
@@ -352,6 +389,40 @@ def _validate_date_range(start_date: date | None, end_date: date | None) -> None
             "start_date must be on or before end_date",
             field="start_date",
         )
+
+
+def _telemetry_response(record: dict | None) -> dict:
+    if not record:
+        return {
+            "telemetry_status": "unavailable",
+            "record": None,
+            "freshness": {"status": "unavailable", "age_seconds": None, "stale": True},
+            "readiness": calculate_dispatch_readiness(None).as_dict(),
+        }
+    try:
+        normalized = normalize_telemetry(record)
+    except TelemetryValidationError:
+        return {
+            "telemetry_status": "invalid",
+            "record": None,
+            "freshness": {"status": "unavailable", "age_seconds": None, "stale": True},
+            "readiness": calculate_dispatch_readiness(None).as_dict(),
+        }
+    return {
+        "telemetry_status": "available",
+        "record": {**record, **normalized},
+        "freshness": telemetry_freshness(normalized["recorded_at"]),
+        "readiness": calculate_dispatch_readiness(normalized).as_dict(),
+    }
+
+
+def _telemetry_writes_allowed(write_key: str | None) -> bool:
+    if os.getenv("TELEMETRY_WRITES_ENABLED", "").strip().lower() not in {
+        "1", "true", "yes",
+    }:
+        return False
+    expected = os.getenv("TELEMETRY_WRITE_TOKEN", "")
+    return bool(expected and write_key) and hmac.compare_digest(write_key, expected)
 
 
 def create_app() -> FastAPI:
@@ -519,6 +590,78 @@ def create_app() -> FastAPI:
             return update_asset(asset_id, fields)
         except SupabaseError as exc:
             _raise_supabase_api_error(exc)
+
+    @app.get("/telemetry/assets/{asset_id}/latest")
+    def latest_asset_telemetry(asset_id: str):
+        try:
+            return {"asset_id": asset_id, **_telemetry_response(get_latest_telemetry(asset_id))}
+        except SupabaseError as exc:
+            _raise_telemetry_api_error(exc)
+
+    @app.get("/telemetry/assets/{asset_id}/history")
+    def asset_telemetry_history(
+        asset_id: str,
+        start_time: Optional[datetime] = Query(default=None),
+        end_time: Optional[datetime] = Query(default=None),
+        limit: int = Query(default=500, ge=1, le=5000),
+    ):
+        for field, value in (("start_time", start_time), ("end_time", end_time)):
+            if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+                raise ApiError(400, "invalid_timestamp", f"{field} must include a timezone offset", field=field)
+        if start_time and end_time and start_time > end_time:
+            raise ApiError(400, "invalid_date_range", "start_time must be on or before end_time", field="start_time")
+        try:
+            records = list_telemetry_history(
+                asset_id, start_at=start_time, end_at=end_time, limit=limit
+            )
+        except SupabaseError as exc:
+            _raise_telemetry_api_error(exc)
+        valid = []
+        invalid_records = 0
+        for record in records:
+            response = _telemetry_response(record)
+            if response["record"] is None:
+                invalid_records += 1
+                continue
+            valid.append(response["record"])
+        return {
+            "asset_id": asset_id,
+            "records": valid,
+            "invalid_records_skipped": invalid_records,
+        }
+
+    @app.get("/telemetry/portfolio/latest")
+    def portfolio_latest_telemetry():
+        try:
+            records = list_portfolio_latest_telemetry()
+        except SupabaseError as exc:
+            _raise_telemetry_api_error(exc)
+        return {
+            "telemetry_status": "available" if records else "unavailable",
+            "assets": [
+                {"asset_id": str(record.get("asset_id") or ""), **_telemetry_response(record)}
+                for record in records
+            ],
+        }
+
+    @app.post("/telemetry", status_code=201)
+    def add_telemetry(
+        request: TelemetryCreateRequest,
+        x_telemetry_key: Optional[str] = Header(default=None, alias="X-Telemetry-Key"),
+    ):
+        if not _telemetry_writes_allowed(x_telemetry_key):
+            raise ApiError(
+                403, "telemetry_writes_disabled",
+                "Telemetry writes are disabled or not authorized",
+            )
+        try:
+            normalized = normalize_telemetry(request.model_dump())
+            created = create_telemetry(normalized)
+        except TelemetryValidationError as exc:
+            raise ApiError(422, "invalid_telemetry", str(exc), field=exc.field) from exc
+        except SupabaseError as exc:
+            _raise_telemetry_api_error(exc)
+        return _telemetry_response(created)
 
     @app.get("/dispatch-events")
     def dispatch_events(

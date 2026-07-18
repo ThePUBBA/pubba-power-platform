@@ -184,6 +184,88 @@ def update_asset(asset_id: str, fields: dict) -> dict:
     return records[0]
 
 
+def create_telemetry(fields: dict) -> dict:
+    """Persist one validated telemetry observation for an existing asset."""
+    asset = get_asset(str(fields.get("asset_id") or ""))
+    if not asset:
+        raise MissingAssetError(str(fields.get("asset_id") or ""))
+    payload = {
+        **fields,
+        "asset_id": asset["asset_id"],
+        "portfolio_id": asset["portfolio_id"],
+    }
+    try:
+        records = _request(
+            "post", "asset_telemetry", json_body=payload,
+            prefer="return=representation",
+        )
+    except SupabaseError as exc:
+        if exc.status_code == 409:
+            raise SupabaseError(
+                "Telemetry already exists for this asset and timestamp",
+                error_code="duplicate_telemetry", status_code=409,
+                operation="create_telemetry",
+            ) from exc
+        raise
+    if not records:
+        raise SupabaseError(
+            "Supabase returned no telemetry after creation",
+            error_code="malformed_supabase_response",
+            operation="create_telemetry",
+        )
+    return records[0]
+
+
+def get_latest_telemetry(asset_id: str) -> dict | None:
+    asset = get_asset(asset_id)
+    if not asset:
+        raise MissingAssetError(asset_id)
+    records = _request(
+        "get", "asset_telemetry",
+        params={
+            "select": "*", "asset_id": f"eq.{asset['asset_id']}",
+            "order": "recorded_at.desc,id.desc", "limit": 1,
+        },
+    )
+    return records[0] if records else None
+
+
+def list_telemetry_history(
+    asset_id: str, *, start_at: datetime | None = None,
+    end_at: datetime | None = None, limit: int = 500,
+) -> list[dict]:
+    asset = get_asset(asset_id)
+    if not asset:
+        raise MissingAssetError(asset_id)
+    params: dict[str, Any] = {
+        "select": "*", "asset_id": f"eq.{asset['asset_id']}",
+        "order": "recorded_at.asc,id.asc", "limit": limit,
+    }
+    filters = []
+    if start_at:
+        filters.append(f"recorded_at.gte.{start_at.isoformat()}")
+    if end_at:
+        filters.append(f"recorded_at.lte.{end_at.isoformat()}")
+    if len(filters) == 1:
+        field, operator, value = filters[0].split(".", 2)
+        params[field] = f"{operator}.{value}"
+    elif filters:
+        params["and"] = f"({','.join(filters)})"
+    return _request("get", "asset_telemetry", params=params)
+
+
+def list_portfolio_latest_telemetry() -> list[dict]:
+    """Return at most one newest observation per asset in the default portfolio."""
+    portfolio = get_default_portfolio()
+    return _list_all(
+        "latest_asset_telemetry",
+        params={
+            "select": "*", "portfolio_id": f"eq.{portfolio['id']}",
+            "order": "asset_id.asc",
+        },
+    )
+
+
 def list_dispatch_events(
     *,
     start_date: date | None = None,
@@ -561,6 +643,14 @@ def verify_migration() -> dict:
             "net_profit", "purchased_energy_mwh", "sold_energy_mwh",
             "average_buy_price_per_mwh", "average_sell_price_per_mwh",
             "portfolio_id", "created_at", "updated_at",
+        },
+        "asset_telemetry": {
+            "id", "portfolio_id", "asset_id", "recorded_at",
+            "state_of_charge_pct", "current_power_mw",
+            "available_charge_power_mw", "available_discharge_power_mw",
+            "available_energy_mwh", "temperature_c", "operational_status",
+            "availability_status", "telemetry_source", "is_simulated",
+            "created_at",
         },
     }
     for table, columns in required_columns.items():

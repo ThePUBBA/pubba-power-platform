@@ -218,3 +218,38 @@ def trend_figure(rows: list[dict], field: str, *, name: str, color: str, currenc
     if categorical:
         fig.update_xaxes(type="category")
     return fig
+
+
+def telemetry_history_figure(rows: list[dict]) -> go.Figure:
+    """Plot observed SOC and current power without interpolating large gaps."""
+    ordered = sorted(rows, key=lambda row: str(row.get("recorded_at") or ""))
+    fig = go.Figure()
+    soc_rows = [row for row in ordered if row.get("state_of_charge_pct") is not None]
+    power_rows = [row for row in ordered if row.get("current_power_mw") is not None]
+    if soc_rows:
+        fig.add_scatter(
+            x=[row["recorded_at"] for row in soc_rows],
+            y=[row["state_of_charge_pct"] for row in soc_rows],
+            name="State of charge", yaxis="y", connectgaps=False,
+            mode="markers" if len(soc_rows) == 1 else "lines+markers",
+            line={"color": MINT, "width": 3}, marker={"color": MINT, "size": 8},
+            customdata=[["Simulated" if row.get("is_simulated") else "Operational"] for row in soc_rows],
+            hovertemplate="%{x|%b %d, %Y · %I:%M %p}<br>%{y:.1f}% SOC<br>%{customdata[0]}<extra></extra>",
+        )
+    if power_rows:
+        fig.add_scatter(
+            x=[row["recorded_at"] for row in power_rows],
+            y=[row["current_power_mw"] for row in power_rows],
+            name="Current power", yaxis="y2", connectgaps=False,
+            mode="markers" if len(power_rows) == 1 else "lines+markers",
+            line={"color": WHITE, "width": 2}, marker={"color": WHITE, "size": 7},
+            customdata=[["Simulated" if row.get("is_simulated") else "Operational"] for row in power_rows],
+            hovertemplate="%{x|%b %d, %Y · %I:%M %p}<br>%{y:.2f} MW<br>%{customdata[0]}<extra></extra>",
+        )
+    fig.update_layout(
+        yaxis={"title": "SOC (%)", "range": [0, 100]},
+        yaxis2={"title": "Power (MW)", "overlaying": "y", "side": "right", "showgrid": False},
+        showlegend=True,
+    )
+    fig.update_xaxes(type="date", tickformat="%I:%M %p\n%b %d", nticks=8)
+    return fig

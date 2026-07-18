@@ -18,6 +18,7 @@ from dashboard.charts import (
     daily_financial_figure,
     dispatch_economics_figure,
     style_chart,
+    telemetry_history_figure,
 )
 from dashboard.components import (
     render_capabilities,
@@ -57,6 +58,14 @@ def _numeric(value: object) -> float | None:
         return float(as_decimal(value))
     except ValueError:
         return None
+
+
+def _optional_power(value: object) -> str:
+    return "Not available" if _numeric(value) is None else format_power(value)
+
+
+def _optional_energy(value: object) -> str:
+    return "Not available" if _numeric(value) is None else format_energy(value)
 
 
 def _parsed_timestamp(value: object) -> datetime | None:
@@ -398,52 +407,123 @@ def _assets_section(st, payload: dict, currency: str, zone: str) -> None:
     total_energy = sum(_numeric(item.get("energy_mwh")) or 0 for item in assets)
     total_revenue = sum(_numeric(item.get("total_revenue")) or 0 for item in assets)
     total_profit = sum(_numeric(item.get("total_profit")) or 0 for item in assets)
-    render_summary_grid(st, [
+    summary_items = [
         ("Portfolio assets", f"{len(assets):,}"),
         ("Active assets", f"{len(active):,}"),
         ("Total power", format_power(total_power)),
         ("Total energy", format_energy(total_energy)),
         ("Asset revenue", format_currency(total_revenue, currency)),
         ("Asset profit", format_currency(total_profit, currency)),
-    ])
+    ]
+    telemetry = (payload.get("dashboard") or {}).get("telemetry") or {}
+    telemetry_assets = {
+        str(item.get("asset_id") or ""): item
+        for item in telemetry.get("assets") or []
+    }
+    if telemetry.get("status") == "available":
+        source = str(telemetry.get("source_classification") or "operational").title()
+        summary_items.extend([
+            ("Average SOC", f'{telemetry["average_state_of_charge_pct"]:.1f}%' if telemetry.get("average_state_of_charge_pct") is not None else "Not available"),
+            ("Available charge", _optional_power(telemetry.get("total_available_charge_power_mw"))),
+            ("Available discharge", _optional_power(telemetry.get("total_available_discharge_power_mw"))),
+            ("Ready to charge", f'{telemetry.get("assets_ready_to_charge", 0):,}'),
+            ("Ready to discharge", f'{telemetry.get("assets_ready_to_discharge", 0):,}'),
+            ("Stale telemetry", f'{telemetry.get("assets_stale", 0):,} · {source}'),
+        ])
+    render_summary_grid(st, summary_items)
     if _asset_presentation_mode(len(assets)) == "cards":
         cards = []
         for item in assets:
+            observation = telemetry_assets.get(str(item.get("asset_id") or ""))
             dispatch_count = int(item.get("total_dispatches") or 0)
             average_profit = _numeric(item.get("average_profit_per_dispatch"))
             if average_profit is None and dispatch_count:
                 average_profit = (_numeric(item.get("total_profit")) or 0) / dispatch_count
+            metrics = [
+                ("Power", format_power(item.get("power_mw"))),
+                ("Energy", format_energy(item.get("energy_mwh"))),
+                ("Dispatches", f"{dispatch_count:,}"),
+                ("Revenue", format_currency(item.get("total_revenue"), currency)),
+                ("Profit", format_currency(item.get("total_profit"), currency)),
+                ("Average profit", "Not available" if average_profit is None else format_currency(average_profit, currency)),
+                ("Last dispatch", format_timestamp(item.get("last_dispatch_time"), zone)),
+            ]
+            soc = None
+            status = str(item.get("status") or "Unknown")
+            if observation:
+                soc_value = _numeric(observation.get("state_of_charge_pct"))
+                soc = {"value": max(0, min(100, soc_value)), "label": f"{soc_value:.1f}%"} if soc_value is not None else None
+                readiness = observation.get("readiness") or {}
+                freshness = observation.get("freshness") or {}
+                age_seconds = freshness.get("age_seconds")
+                freshness_label = "Not available" if age_seconds is None else f"{age_seconds // 60} min · {freshness.get('status', 'unknown')}"
+                metrics.extend([
+                    ("Current power", _optional_power(observation.get("current_power_mw"))),
+                    ("Charge available", _optional_power(observation.get("available_charge_power_mw"))),
+                    ("Discharge available", _optional_power(observation.get("available_discharge_power_mw"))),
+                    ("Energy available", _optional_energy(observation.get("available_energy_mwh"))),
+                    ("Temperature", "Not available" if observation.get("temperature_c") is None else f'{observation["temperature_c"]:.1f} °C'),
+                    ("Operational status", str(observation.get("operational_status") or "Not available").replace("_", " ").title()),
+                    ("Readiness", str(readiness.get("explanation") or "Telemetry unavailable")),
+                    ("Last telemetry", format_timestamp(observation.get("recorded_at"), zone)),
+                    ("Freshness", freshness_label),
+                    ("Telemetry source", f'{observation.get("telemetry_source") or "Unknown"} · {"Simulated" if observation.get("is_simulated") else "Operational"}'),
+                ])
+                status = str(readiness.get("state") or status).replace("_", " ")
+            else:
+                metrics.extend([
+                    ("State of charge", "Telemetry unavailable"),
+                    ("Dispatch readiness", "Telemetry unavailable"),
+                ])
             cards.append({
                 "name": str(item.get("asset_name") or item.get("asset_id") or "Unnamed asset"),
                 "technology": str(item.get("technology") or "Technology not recorded"),
                 "location": str(item.get("location") or "Location not recorded"),
-                "status": str(item.get("status") or "Unknown"),
-                "metrics": [
-                    ("Power", format_power(item.get("power_mw"))),
-                    ("Energy", format_energy(item.get("energy_mwh"))),
-                    ("Dispatches", f"{dispatch_count:,}"),
-                    ("Revenue", format_currency(item.get("total_revenue"), currency)),
-                    ("Profit", format_currency(item.get("total_profit"), currency)),
-                    ("Average profit", "Not available" if average_profit is None else format_currency(average_profit, currency)),
-                    ("Last dispatch", format_timestamp(item.get("last_dispatch_time"), zone)),
-                ],
+                "status": status,
+                "soc": soc,
+                "metrics": metrics,
             })
         render_asset_cards(st, cards)
-        return
-    rows = [{
-        "Asset": item.get("asset_name") or item.get("asset_id") or "Unnamed asset",
-        "Technology": item.get("technology") or "Not recorded",
-        "Location": item.get("location") or "Not recorded",
-        "Status": item.get("status") or "Unknown",
-        "Power MW": _numeric(item.get("power_mw")),
-        "Energy MWh": _numeric(item.get("energy_mwh")),
-        "Dispatches": int(item.get("total_dispatches") or 0),
-        "Revenue": _numeric(item.get("total_revenue")),
-        "Profit": _numeric(item.get("total_profit")),
-        "Average Profit": _numeric(item.get("average_profit_per_dispatch")),
-        "Last Dispatch": format_timestamp(item.get("last_dispatch_time"), zone),
-    } for item in assets]
-    st.dataframe(rows, width="stretch", hide_index=True)
+    else:
+        rows = [{
+            "Asset": item.get("asset_name") or item.get("asset_id") or "Unnamed asset",
+            "Technology": item.get("technology") or "Not recorded",
+            "Location": item.get("location") or "Not recorded",
+            "Status": item.get("status") or "Unknown",
+            "Power MW": _numeric(item.get("power_mw")),
+            "Energy MWh": _numeric(item.get("energy_mwh")),
+            "SOC %": _numeric(telemetry_assets.get(str(item.get("asset_id") or ""), {}).get("state_of_charge_pct")),
+            "Readiness": (telemetry_assets.get(str(item.get("asset_id") or ""), {}).get("readiness") or {}).get("state", "Telemetry unavailable"),
+            "Dispatches": int(item.get("total_dispatches") or 0),
+            "Revenue": _numeric(item.get("total_revenue")),
+            "Profit": _numeric(item.get("total_profit")),
+            "Average Profit": _numeric(item.get("average_profit_per_dispatch")),
+            "Last Dispatch": format_timestamp(item.get("last_dispatch_time"), zone),
+        } for item in assets]
+        st.dataframe(rows, width="stretch", hide_index=True)
+
+    history = payload.get("telemetry_history") or []
+    if history:
+        if payload.get("telemetry_error"):
+            st.warning("Telemetry history is temporarily unavailable; latest asset state remains visible.")
+        selected_asset = str(history[0].get("asset_id") or "Asset")
+        if any(item.get("is_simulated") for item in history):
+            st.caption("Telemetry history includes clearly labeled simulated development data.")
+        latest = telemetry_assets.get(selected_asset) or {}
+        if (latest.get("freshness") or {}).get("stale"):
+            st.warning("Telemetry is stale; do not use it as a live dispatch instruction.")
+        st.plotly_chart(
+            style_chart(
+                telemetry_history_figure(history),
+                title=f"{selected_asset} telemetry history",
+                subtitle="Observed state of charge and current power; gaps are not interpolated.",
+                height=390,
+            ),
+            width="stretch",
+            config=CHART_CONFIG,
+        )
+    elif telemetry.get("status") == "available":
+        st.caption("Telemetry history is not available; latest asset observations remain visible.")
 
 
 def _render_live(st, client) -> None:

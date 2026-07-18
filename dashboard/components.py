@@ -346,6 +346,25 @@ def install_console_theme(st) -> None:
             gap: .75rem;
             margin-top: .9rem;
         }
+        .pubba-soc { margin-top: .9rem; }
+        .pubba-soc-head {
+            display: flex;
+            justify-content: space-between;
+            color: var(--pubba-muted);
+            font-size: .75rem;
+            margin-bottom: .35rem;
+        }
+        .pubba-soc-track {
+            height: .7rem;
+            border: 1px solid var(--pubba-border);
+            border-radius: 999px;
+            background: #0b0b0b;
+            overflow: hidden;
+        }
+        .pubba-soc-fill {
+            height: 100%;
+            background: var(--pubba-accent);
+        }
         .pubba-asset-metric span { display: block; }
         .pubba-asset-metric-label {
             color: var(--pubba-muted);
@@ -571,7 +590,14 @@ def render_asset_cards(st, assets: list[dict]) -> None:
         f'<div class="pubba-asset-name">{escape(asset["name"])}</div>'
         f'<div class="pubba-asset-meta">{escape(asset["technology"])} · {escape(asset["location"])}</div>'
         f'</div><div class="pubba-asset-status">{escape(asset["status"])}</div></div>'
-        '<div class="pubba-asset-metrics">'
+        + (
+            '<div class="pubba-soc">'
+            f'<div class="pubba-soc-head"><span>State of charge</span><span>{escape(asset["soc"]["label"])}</span></div>'
+            f'<div class="pubba-soc-track" role="progressbar" aria-label="State of charge" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{asset["soc"]["value"]}">'
+            f'<div class="pubba-soc-fill" style="width:{asset["soc"]["value"]}%"></div></div></div>'
+            if asset.get("soc") else ''
+        )
+        + '<div class="pubba-asset-metrics">'
         + "".join(
             '<div class="pubba-asset-metric">'
             f'<span class="pubba-asset-metric-label">{escape(label)}</span>'

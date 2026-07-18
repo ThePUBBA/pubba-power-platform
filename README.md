@@ -6,6 +6,21 @@ FastAPI service for retrieving CAISO locational marginal price (LMP) data and id
 
 PUBBA Power is the energy division of PUBBA, focused on electricity trading, long-duration energy storage (LDES), portfolio optimization, and grid services.
 
+## Battery telemetry foundation
+
+Battery telemetry is stored separately from configured asset and dispatch records. The
+additive migration is
+`supabase/migrations/202607170001_battery_telemetry_foundation.sql`; safe application
+steps and the audited asset schema are documented in
+`docs/architecture/ADR-004-battery-telemetry-foundation.md`.
+
+Telemetry routes include the latest observation and history for one asset, the latest
+observation per portfolio asset, and a disabled-by-default ingestion endpoint. Enable
+writes only for authenticated ingestion with `TELEMETRY_WRITES_ENABLED=true` and a
+secret `TELEMETRY_WRITE_TOKEN` supplied as `X-Telemetry-Key`. The development generator
+is separately gated by `PUBBA_ENABLE_SIMULATED_TELEMETRY=true` and must never be enabled
+in production.
+
 ## Repository
 
 The PUBBA Power platform source is hosted at [ThePubba/pubba-power-platform](https://github.com/ThePubba/pubba-power-platform).

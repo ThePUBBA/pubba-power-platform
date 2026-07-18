@@ -14,7 +14,18 @@ from services.portfolio_summary import (
     build_portfolio_summary,
     reporting_period_starts,
 )
-from supabase import get_default_portfolio, get_portfolio_summary_records
+from services.telemetry import (
+    TelemetryValidationError,
+    calculate_dispatch_readiness,
+    normalize_telemetry,
+    telemetry_freshness,
+)
+from supabase import (
+    SupabaseError,
+    get_default_portfolio,
+    get_portfolio_summary_records,
+    list_portfolio_latest_telemetry,
+)
 
 
 DEFAULT_CAISO_NODE = "TH_NP15_GEN-APND"
@@ -144,6 +155,56 @@ def _market_snapshot(
         }
 
 
+def _telemetry_snapshot(
+    records: list[dict], *, now: datetime,
+) -> dict:
+    assets = []
+    for record in records:
+        try:
+            normalized = normalize_telemetry(record, now=now)
+        except TelemetryValidationError:
+            continue
+        freshness = telemetry_freshness(normalized["recorded_at"], now=now)
+        readiness = calculate_dispatch_readiness(normalized, now=now).as_dict()
+        assets.append({**normalized, "freshness": freshness, "readiness": readiness})
+    ready_charge = {
+        "ready_to_charge", "ready_charge_discharge",
+    }
+    ready_discharge = {
+        "ready_to_discharge", "ready_charge_discharge",
+    }
+    states = [item["readiness"]["state"] for item in assets]
+    soc_values = [
+        item["state_of_charge_pct"] for item in assets
+        if item.get("state_of_charge_pct") is not None
+    ]
+    charge_values = [
+        item["available_charge_power_mw"] for item in assets
+        if item.get("available_charge_power_mw") is not None
+    ]
+    discharge_values = [
+        item["available_discharge_power_mw"] for item in assets
+        if item.get("available_discharge_power_mw") is not None
+    ]
+    return {
+        "status": "available" if assets else "unavailable",
+        "source_classification": (
+            "simulated" if assets and all(item["is_simulated"] for item in assets)
+            else "mixed" if any(item["is_simulated"] for item in assets)
+            else "operational" if assets else "unavailable"
+        ),
+        "average_state_of_charge_pct": (
+            sum(soc_values) / len(soc_values) if soc_values else None
+        ),
+        "total_available_charge_power_mw": sum(charge_values) if charge_values else None,
+        "total_available_discharge_power_mw": sum(discharge_values) if discharge_values else None,
+        "assets_ready_to_charge": sum(state in ready_charge for state in states),
+        "assets_ready_to_discharge": sum(state in ready_discharge for state in states),
+        "assets_limited": sum(state in {"limited", "telemetry_stale"} for state in states),
+        "assets_unavailable": sum(state in {"unavailable", "telemetry_unavailable"} for state in states),
+        "assets_stale": sum(item["freshness"]["stale"] for item in assets),
+        "assets": assets,
+    }
 def build_dashboard_summary(
     *,
     timezone_name: str | None = None,
@@ -152,6 +213,7 @@ def build_dashboard_summary(
     portfolio_resolver: Callable[[], dict] = get_default_portfolio,
     records_loader: Callable[[dict], tuple[list[dict], list[dict]]] = get_portfolio_summary_records,
     market_loader: Callable[..., object] = fetch_lmp_data,
+    telemetry_loader: Callable[[], list[dict]] = list_portfolio_latest_telemetry,
 ) -> dict:
     generated_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     portfolio = portfolio_resolver()
@@ -178,6 +240,10 @@ def build_dashboard_summary(
         "status": "not_checked", "location": location, "market": "RTM",
         "current_price_per_mwh": None, "price_points": [], "updated_at": None,
     }
+    try:
+        telemetry = _telemetry_snapshot(telemetry_loader(), now=generated_at)
+    except SupabaseError:
+        telemetry = _telemetry_snapshot([], now=generated_at)
     today_revenue = sum((_decimal(row.get("discharge_revenue")) for row in today), ZERO)
     today_profit = sum((_decimal(row.get("net_profit")) for row in today), ZERO)
     prices = [
@@ -194,7 +260,7 @@ def build_dashboard_summary(
             "available_capacity_mw": summary["fleet"]["power_capacity_mw"],
             "active_assets": summary["fleet"]["active_assets"],
             "today_dispatches": len(today),
-            "battery_state_of_charge_pct": None,
+            "battery_state_of_charge_pct": telemetry["average_state_of_charge_pct"],
             "current_market_price_per_mwh": market["current_price_per_mwh"],
             "last_api_sync_at": generated_at,
         },
@@ -204,13 +270,22 @@ def build_dashboard_summary(
             ) else "operational_record",
             "available_capacity": "configured_active_asset_capacity",
             "portfolio_value": "unavailable_no_valuation_source",
-            "battery_state_of_charge": "unavailable_no_telemetry_source",
+            "battery_state_of_charge": telemetry["source_classification"],
         },
         "series": {
             "daily": _daily_series(completed, zone),
             "dispatches": _dispatch_series(completed),
             "market_prices": market["price_points"],
-            "state_of_charge": [],
+            "state_of_charge": [
+                {
+                    "asset_id": item["asset_id"],
+                    "timestamp": item["recorded_at"],
+                    "state_of_charge_pct": item["state_of_charge_pct"],
+                    "is_simulated": item["is_simulated"],
+                }
+                for item in telemetry["assets"]
+                if item.get("state_of_charge_pct") is not None
+            ],
             "asset_utilization": [],
         },
         "status": {
@@ -218,7 +293,9 @@ def build_dashboard_summary(
             "supabase": "connected",
             "market_data": market["status"],
             "simulation_engine": "ready",
+            "telemetry": telemetry["status"],
         },
+        "telemetry": telemetry,
         "metadata": {
             **summary["metadata"],
             "market_updated_at": market["updated_at"],
