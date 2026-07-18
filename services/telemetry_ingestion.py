@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from datetime import datetime, timezone
 from typing import Any, Callable
 from uuid import uuid4
 
-from services.telemetry import TelemetryValidationError
+from services.telemetry import TelemetryValidationError, parse_timestamp
 from services.telemetry_adapters import GenericJsonTelemetryAdapter, TelemetryAdapter
 from supabase import (
     SupabaseError,
@@ -44,6 +45,15 @@ def _classification_guard(
             "telemetry_source cannot mix simulated and operational observations",
             field="is_simulated",
         )
+    if (
+        str(latest_for_source.get("asset_id") or "") == record["asset_id"]
+        and parse_timestamp(record["recorded_at"])
+        < parse_timestamp(latest_for_source.get("recorded_at"))
+    ):
+        raise TelemetryValidationError(
+            "recorded_at is older than the latest observation for this asset and source",
+            field="recorded_at",
+        )
 
 
 def ingest_batch(
@@ -53,6 +63,8 @@ def ingest_batch(
     source_latest: Callable[[str], dict | None] = get_latest_telemetry_for_source,
     max_batch_size: int | None = None,
 ) -> dict[str, Any]:
+    started = time.monotonic()
+    requested_at = datetime.now(timezone.utc)
     limit = max_batch_size or configured_batch_limit()
     if not observations:
         raise TelemetryValidationError("observations must contain at least one record", field="observations")
@@ -63,11 +75,13 @@ def ingest_batch(
     selected_adapter = adapter or GenericJsonTelemetryAdapter()
     ingestion_id = str(uuid4())
     accepted, duplicates, rejected = [], [], []
+    normalized_count = 0
     source_classes: dict[str, bool] = {}
     seen: set[tuple[str, str]] = set()
     for index, payload in enumerate(observations):
         try:
             normalized = selected_adapter.normalize(payload)
+            normalized_count += 1
             identity = (normalized["asset_id"], normalized["recorded_at"])
             if identity in seen:
                 duplicates.append({"index": index, "asset_id": identity[0], "recorded_at": identity[1]})
@@ -112,14 +126,17 @@ def ingest_batch(
     )
     audit = {
         "ingestion_id": ingestion_id,
+        "requested_at": requested_at.isoformat(),
         "ingested_at": datetime.now(timezone.utc).isoformat(),
         "telemetry_sources": sorted(source_classes),
         "received": len(observations),
+        "normalized": normalized_count,
         "accepted": len(accepted),
         "rejected": len(rejected),
         "duplicate": len(duplicates),
         "status": status,
         "error_summary": sorted({item["code"] for item in rejected}),
+        "processing_duration_ms": round((time.monotonic() - started) * 1000, 3),
     }
     logger.info("Telemetry ingestion completed", extra={"telemetry_ingestion": audit})
     return {

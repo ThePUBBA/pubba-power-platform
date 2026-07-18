@@ -50,6 +50,7 @@ from services.telemetry import (
 )
 from services.telemetry_adapters import GenericJsonTelemetryAdapter
 from services.telemetry_ingestion import configured_batch_limit, ingest_batch
+from services.telemetry_sources import merge_source_runtime_health, source_runtime_registry
 
 
 SERVICE_NAME = "PUBBA Power API"
@@ -664,7 +665,12 @@ def create_app() -> FastAPI:
             records = list_latest_telemetry_by_source()
         except SupabaseError as exc:
             _raise_telemetry_api_error(exc)
-        return {"sources": source_health(records, configured_sources=configured)}
+        health = source_health(records, configured_sources=configured)
+        return {
+            "sources": merge_source_runtime_health(
+                health, source_runtime_registry.snapshot()
+            )
+        }
 
     @app.post("/telemetry", status_code=201)
     def add_telemetry(

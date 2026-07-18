@@ -23,6 +23,10 @@ configuration documented in `.env.example`. The provider-neutral adapter archite
 payloads, idempotency, source health, credential rotation, and future BMS/SCADA adapter
 process are documented in
 `docs/architecture/ADR-005-secure-telemetry-ingestion.md`.
+The audited status of the first real source, required external access, asset identity
+mapping, connector boundary, and one-asset rollout procedure are documented in
+`docs/architecture/ADR-006-first-telemetry-source-readiness.md`. No provider is currently
+configured, and production telemetry writes remain disabled.
 
 The development generator is separately gated by
 `PUBBA_ENABLE_SIMULATED_TELEMETRY=true` and must never be enabled in production.

@@ -278,7 +278,7 @@ def source_health(
             freshness = telemetry_freshness(receipt, now=now)
             state = {
                 "fresh": "receiving_data",
-                "delayed": "connected",
+                "delayed": "delayed",
                 "stale": "stale",
                 "offline": "error",
             }[freshness["status"]]
