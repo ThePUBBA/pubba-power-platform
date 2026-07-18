@@ -48,6 +48,8 @@ and manual provider/bootstrap steps are documented in
 `docs/architecture/ADR-009-operator-identity-rbac.md`.
 The staged OIDC, first-Admin, portfolio access, transactional audit, and rollback
 procedure is documented in `docs/deployment/operator-identity-rollout.md`.
+The manual production acceptance procedure, verification SQL, evidence gates, and
+operator checklist are in `docs/deployment/production-identity-acceptance-runbook.md`.
 
 ## Repository
 

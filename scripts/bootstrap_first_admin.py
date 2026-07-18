@@ -18,6 +18,10 @@ def main() -> int:
         "--confirm-first-admin", action="store_true",
         help="Required acknowledgement that the subject was verified in the OIDC provider",
     )
+    parser.add_argument(
+        "--execute", action="store_true",
+        help="Perform the insert after a successful dry run; omitted means no database write",
+    )
     args = parser.parse_args()
     if not args.confirm_first_admin:
         parser.error("--confirm-first-admin is required")
@@ -27,6 +31,9 @@ def main() -> int:
         parser.error("An operator already exists for this OIDC subject")
     if any(item.get("role") == "admin" for item in list_operators(limit=1000)):
         parser.error("An Admin already exists; use the authenticated Admin API for additional Admins")
+    if not args.execute:
+        print("Dry run passed: verified-subject checks succeeded; no operator was created")
+        return 0
     created = create_operator({
         "auth_subject": args.subject.strip(),
         "email": args.email.strip().lower(),

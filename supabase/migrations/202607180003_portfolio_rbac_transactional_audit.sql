@@ -231,6 +231,9 @@ revoke all on function public.pubba_audited_recommendation_action(uuid,uuid,text
 revoke all on function public.pubba_audited_recommendation_capture(uuid,jsonb) from public;
 revoke all on function public.pubba_audited_operator_update(uuid,uuid,jsonb) from public;
 revoke all on function public.pubba_audited_portfolio_access_change(uuid,uuid,uuid,text,boolean) from public;
+revoke all on function public.pubba_effective_portfolio_role(uuid,uuid) from public;
+revoke all on function public.pubba_require_portfolio_role(uuid,uuid,text[]) from public;
+revoke all on function public.pubba_sanitize_audit_metadata(jsonb) from public;
 grant execute on function public.pubba_audited_recommendation_action(uuid,uuid,text,jsonb) to service_role;
 grant execute on function public.pubba_audited_recommendation_capture(uuid,jsonb) to service_role;
 grant execute on function public.pubba_audited_operator_update(uuid,uuid,jsonb) to service_role;

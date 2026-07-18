@@ -185,6 +185,7 @@ def test_new_migration_is_additive_scoped_and_transactional():
         assert f"pubba_audited_{action}" in sql
     assert "security definer" in sql
     assert "grant execute" in sql
+    assert "pubba_effective_portfolio_role(uuid,uuid) from public" in sql
     assert "drop table" not in sql.lower()
 
 
@@ -194,6 +195,26 @@ def test_bootstrap_requires_verified_subject_and_prevents_second_admin():
     assert "@\" in args.subject" in source
     assert "An Admin already exists" in source
     assert '"role": "admin"' in source
+    assert '"--execute"' in source
+
+
+def test_bootstrap_defaults_to_no_write_dry_run(monkeypatch, capsys):
+    import scripts.bootstrap_first_admin as bootstrap
+
+    monkeypatch.setattr(bootstrap, "get_operator_by_subject", lambda subject: None)
+    monkeypatch.setattr(bootstrap, "list_operators", lambda **kwargs: [])
+    monkeypatch.setattr(
+        bootstrap, "create_operator",
+        lambda fields: (_ for _ in ()).throw(AssertionError("dry run inserted operator")),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["bootstrap_first_admin.py", "--subject", "provider-sub-123",
+         "--email", "admin@pubba.test", "--display-name", "Admin",
+         "--confirm-first-admin"],
+    )
+    assert bootstrap.main() == 0
+    assert "no operator was created" in capsys.readouterr().out
 
 
 def test_streamlit_has_no_direct_supabase_access():

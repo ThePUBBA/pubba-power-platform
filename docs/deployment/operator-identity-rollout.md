@@ -20,10 +20,10 @@ The backend authorizes exclusively by verified `sub`; email and display name are
 
 1. Complete a test OIDC login and inspect the signed token through an approved server-side diagnostic or the provider administration console.
 2. Copy the exact stable `sub`; do not use email as the subject.
-3. With service-role environment variables available only in an approved administrative shell, run:
+3. With service-role environment variables available only in an approved administrative shell, run the no-write dry run:
    `python scripts/bootstrap_first_admin.py --subject '<verified-sub>' --email '<email>' --display-name '<name>' --confirm-first-admin`
 4. The command refuses email-like subjects, duplicate subjects, or creation when any Admin already exists.
-5. Verify `/operators/me` with the Admin's real OIDC session.
+5. After separate approval, repeat the command with `--execute` and verify `/operators/me` with the Admin's real OIDC session.
 
 Rollback: deactivate the bootstrap record with an approved database change while auth enforcement is off. Do not delete its audit history. Correct a mistaken subject only before operator activity exists; otherwise deactivate it and provision a new record through the Admin workflow.
 
