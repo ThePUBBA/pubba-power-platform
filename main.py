@@ -33,6 +33,7 @@ from supabase import (
     get_asset,
     get_operator,
     get_operator_by_subject,
+    get_portfolio,
     get_recommendation_approval,
     get_default_portfolio,
     get_latest_telemetry,
@@ -47,6 +48,7 @@ from supabase import (
     list_recommendation_history,
     list_operator_audit_events,
     list_operator_portfolios,
+    list_portfolios,
     list_operators,
     list_simulation_results,
     list_telemetry_history,
@@ -749,6 +751,7 @@ def create_app() -> FastAPI:
         responses={400: {"description": "Invalid date range or timezone"}, 503: {"description": "Default portfolio unavailable"}},
     )
     def portfolio_summary(
+        portfolio_id: Optional[str] = None,
         start_at: Optional[datetime] = Query(
             default=None, description="Inclusive summary start timestamp with offset"
         ),
@@ -760,20 +763,36 @@ def create_app() -> FastAPI:
             alias="timezone",
             description="Validated IANA reporting timezone override",
         ),
+        principal: OperatorPrincipal | None = Depends(optional_read_operator),
     ):
         try:
-            return build_portfolio_summary(
-                start_at=start_at, end_at=end_at, timezone_name=timezone_name
-            )
+            portfolio_id = resolve_read_portfolio(principal, portfolio_id)
+            options = {
+                "start_at": start_at, "end_at": end_at,
+                "timezone_name": timezone_name,
+            }
+            if portfolio_id:
+                portfolio = get_portfolio(portfolio_id)
+                if not portfolio:
+                    raise ApiError(404, "portfolio_not_found", "Portfolio was not found")
+                options["portfolio_resolver"] = lambda: portfolio
+            return build_portfolio_summary(**options)
         except PortfolioSummaryError as exc:
             raise ApiError(400, exc.code, str(exc), field=exc.field) from exc
         except SupabaseError as exc:
             _raise_supabase_api_error(exc)
 
     @app.get("/portfolio/assets", response_model=list[AssetPerformanceResponse])
-    def portfolio_assets():
+    def portfolio_assets(
+        portfolio_id: Optional[str] = None,
+        principal: OperatorPrincipal | None = Depends(optional_read_operator),
+    ):
         try:
-            return get_asset_performance()
+            portfolio_id = resolve_read_portfolio(principal, portfolio_id)
+            return (
+                get_asset_performance(portfolio_id=portfolio_id)
+                if portfolio_id else get_asset_performance()
+            )
         except SupabaseError as exc:
             _raise_supabase_api_error(exc)
 
@@ -787,16 +806,28 @@ def create_app() -> FastAPI:
         ),
     )
     def dashboard_summary(
+        portfolio_id: Optional[str] = None,
         timezone_name: Optional[str] = Query(default=None, alias="timezone"),
         include_market: bool = Query(default=True),
+        principal: OperatorPrincipal | None = Depends(optional_read_operator),
     ):
         try:
-            dashboard = build_dashboard_summary(
-                timezone_name=timezone_name, include_market=include_market
-            )
+            portfolio_id = resolve_read_portfolio(principal, portfolio_id)
+            options = {"timezone_name": timezone_name, "include_market": include_market}
+            portfolio = None
+            if portfolio_id:
+                portfolio = get_portfolio(portfolio_id)
+                if not portfolio:
+                    raise ApiError(404, "portfolio_not_found", "Portfolio was not found")
+                options.update({
+                    "portfolio_resolver": lambda: portfolio,
+                    "telemetry_loader": lambda: list_portfolio_latest_telemetry(str(portfolio["id"])),
+                })
+            dashboard = build_dashboard_summary(**options)
             try:
                 dashboard["recommendations"] = current_recommendations(
-                    dashboard=dashboard
+                    dashboard=dashboard,
+                    portfolio_id=str(portfolio["id"]) if portfolio else None,
                 )
             except ApiError:
                 dashboard["recommendations"] = {
@@ -926,10 +957,15 @@ def create_app() -> FastAPI:
             )
         }
 
-    def current_recommendations(*, dashboard: dict | None = None) -> dict:
+    def current_recommendations(
+        *, dashboard: dict | None = None, portfolio_id: str | None = None,
+    ) -> dict:
         try:
             dashboard = dashboard or build_dashboard_summary(include_market=True)
-            assets = get_asset_performance()
+            assets = (
+                get_asset_performance(portfolio_id=portfolio_id)
+                if portfolio_id else get_asset_performance()
+            )
         except SupabaseError as exc:
             _raise_supabase_api_error(exc)
         metadata = dashboard.get("metadata") or {}
@@ -957,7 +993,7 @@ def create_app() -> FastAPI:
             portfolio_id = resolve_read_portfolio(principal, portfolio_id)
             if portfolio_id:
                 require_portfolio_permission(principal, portfolio_id, "recommendations:read")
-        return current_recommendations()
+        return current_recommendations(portfolio_id=portfolio_id)
 
     @app.get("/recommendations/assets/{asset_id}")
     def asset_recommendation(
@@ -1013,13 +1049,14 @@ def create_app() -> FastAPI:
 
     @app.post("/recommendations/{asset_id}/capture", status_code=201)
     def capture_recommendation(
-        asset_id: str, response: Response,
+        asset_id: str, response: Response, portfolio_id: Optional[str] = None,
         principal: OperatorPrincipal = Depends(
             require_permission("recommendations:capture")
         ),
     ):
         require_operator_writes()
-        current = current_recommendations()
+        portfolio_id = resolve_read_portfolio(principal, portfolio_id)
+        current = current_recommendations(portfolio_id=portfolio_id)
         item = next((
             value for value in current["recommendations"]
             if value["asset_id"] == asset_id
@@ -1032,7 +1069,9 @@ def create_app() -> FastAPI:
                 "A fresh market recommendation is not currently available",
             )
         try:
-            portfolio = get_default_portfolio()
+            portfolio = get_portfolio(portfolio_id) if portfolio_id else get_default_portfolio()
+            if not portfolio:
+                raise ApiError(404, "portfolio_not_found", "Portfolio was not found")
             require_portfolio_permission(
                 principal, str(portfolio["id"]), "recommendations:capture"
             )
@@ -1377,8 +1416,7 @@ def create_app() -> FastAPI:
     ):
         try:
             if principal.role == "admin":
-                portfolio = get_default_portfolio()
-                return [{"access_role": "admin", **portfolio}]
+                return [{"access_role": "admin", **portfolio} for portfolio in list_portfolios()]
             records = list_operator_portfolios(principal.operator_id)
         except SupabaseError as exc:
             _raise_supabase_api_error(exc)

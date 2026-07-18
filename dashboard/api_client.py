@@ -201,7 +201,8 @@ class Only1ApiClient:
                 "Operator authentication is required for this action.",
                 code="authentication_required",
             )
-        payload = self._request("post", path, json=json)
+        params = {"portfolio_id": self._portfolio_id} if self._portfolio_id else None
+        payload = self._request("post", path, json=json, params=params)
         if not isinstance(payload, dict):
             raise DashboardApiError(
                 "The backend returned an invalid recommendation workflow response.",

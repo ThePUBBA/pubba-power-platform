@@ -158,6 +158,24 @@ def test_dashboard_portfolio_context_is_sent_to_backend():
     assert session.kwargs["params"]["portfolio_id"] == PORTFOLIO_ID
 
 
+def test_overview_assets_are_filtered_by_authorized_portfolio(monkeypatch):
+    configure_auth(monkeypatch, role="viewer")
+    monkeypatch.setenv("OPERATOR_PORTFOLIO_RBAC_ENABLED", "true")
+    monkeypatch.setattr(main, "list_operator_portfolios", lambda operator_id: [
+        {"portfolio_id": PORTFOLIO_ID, "active": True}
+    ])
+    captured = {}
+    monkeypatch.setattr(
+        main, "get_asset_performance",
+        lambda **kwargs: captured.update(kwargs) or [],
+    )
+    response = TestClient(main.app).get(
+        f"/portfolio/assets?portfolio_id={PORTFOLIO_ID}", headers=AUTH_HEADERS
+    )
+    assert response.status_code == 200
+    assert captured["portfolio_id"] == PORTFOLIO_ID
+
+
 def test_new_migration_is_additive_scoped_and_transactional():
     sql = Path("supabase/migrations/202607180003_portfolio_rbac_transactional_audit.sql").read_text()
     assert "create table if not exists public.operator_portfolio_access" in sql

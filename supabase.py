@@ -117,12 +117,37 @@ def get_default_portfolio() -> dict:
     return portfolio
 
 
-def list_assets(*, limit: int | None = None, offset: int = 0) -> list[dict]:
+def get_portfolio(portfolio_id: str) -> dict | None:
+    records = _request(
+        "get", "portfolios",
+        params={
+            "select": "id,code,name,default_market,reporting_timezone,currency_code,status",
+            "id": f"eq.{portfolio_id}", "limit": 1,
+        },
+    )
+    return records[0] if records else None
+
+
+def list_portfolios() -> list[dict]:
+    return _request(
+        "get", "portfolios",
+        params={
+            "select": "id,code,name,default_market,reporting_timezone,currency_code,status",
+            "order": "name.asc,id.asc",
+        },
+    )
+
+
+def list_assets(
+    *, portfolio_id: str | None = None, limit: int | None = None, offset: int = 0,
+) -> list[dict]:
     params: dict[str, Any] = {
         "select": "*",
         "order": "asset_id.asc,id.asc",
         "offset": offset,
     }
+    if portfolio_id:
+        params["portfolio_id"] = f"eq.{portfolio_id}"
     if limit is not None:
         params["limit"] = limit
         return _request("get", "assets", params=params)
@@ -274,9 +299,9 @@ def list_telemetry_history(
     return _request("get", "asset_telemetry", params=params)
 
 
-def list_portfolio_latest_telemetry() -> list[dict]:
+def list_portfolio_latest_telemetry(portfolio_id: str | None = None) -> list[dict]:
     """Return at most one newest observation per asset in the default portfolio."""
-    portfolio = get_default_portfolio()
+    portfolio = {"id": portfolio_id} if portfolio_id else get_default_portfolio()
     return _list_all(
         "latest_asset_telemetry",
         params={
@@ -583,9 +608,12 @@ def get_portfolio_summary_records(portfolio: dict) -> tuple[list[dict], list[dic
     return assets, dispatches
 
 
-def get_asset_performance() -> list[dict]:
-    assets = list_assets()
-    dispatches = list_dispatch_events(limit=None)
+def get_asset_performance(portfolio_id: str | None = None) -> list[dict]:
+    assets = list_assets(portfolio_id=portfolio_id) if portfolio_id else list_assets()
+    dispatches = (
+        list_dispatch_events(portfolio_id=portfolio_id, limit=None)
+        if portfolio_id else list_dispatch_events(limit=None)
+    )
     metrics = {
         asset["asset_id"]: {
             "total_dispatches": 0,
