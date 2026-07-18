@@ -3,7 +3,11 @@ from types import SimpleNamespace
 import pytest
 
 from dashboard.api_client import DashboardApiError
-from dashboard.auth import configure_operator_identity
+from dashboard.auth import (
+    _identity_token,
+    _log_token_exposure,
+    configure_operator_identity,
+)
 
 
 class StopExecution(Exception):
@@ -121,3 +125,31 @@ def test_logout_calls_streamlit_logout_and_stops():
         configure_operator_identity(st, FakeClient())
 
     assert st.logout_calls == 1
+
+
+def test_token_diagnostic_logs_only_container_and_supported_key_names(caplog):
+    secret_token = "secret-token-value-must-not-be-logged"
+    user = SimpleNamespace(tokens={"id": secret_token})
+
+    with caplog.at_level("INFO", logger="dashboard.auth"):
+        _log_token_exposure(user)
+
+    record = caplog.records[-1]
+    assert "token_container_exists=True" in record.getMessage()
+    assert "token_keys=('id',)" in record.getMessage()
+    assert secret_token not in caplog.text
+
+
+def test_token_diagnostic_reports_missing_container_without_claims(caplog):
+    with caplog.at_level("INFO", logger="dashboard.auth"):
+        _log_token_exposure(SimpleNamespace())
+
+    record = caplog.records[-1]
+    assert "token_container_exists=False" in record.getMessage()
+    assert "token_keys=()" in record.getMessage()
+
+
+def test_identity_token_does_not_fall_back_to_access_token():
+    user = SimpleNamespace(tokens={"access": "oauth-access-token"})
+
+    assert _identity_token(user) is None
