@@ -2,14 +2,9 @@
 
 from __future__ import annotations
 
-import logging
 import os
 
 from dashboard.api_client import DashboardApiError, Only1ApiClient
-
-
-logger = logging.getLogger(__name__)
-_SUPPORTED_TOKEN_KEYS = frozenset({"id", "access"})
 
 
 def _auth_mode() -> str:
@@ -33,29 +28,6 @@ def _identity_token(user: object) -> str | None:
         return str(value).strip() or None
     except (AttributeError, KeyError, TypeError):
         return None
-
-
-def _log_token_exposure(user: object) -> None:
-    """Log token-container availability and supported key names, never values."""
-    try:
-        tokens = user.tokens
-    except (AttributeError, KeyError, TypeError):
-        logger.info(
-            "Streamlit OIDC token exposure status: token_container_exists=%s token_keys=%s",
-            False,
-            (),
-        )
-        return
-    try:
-        token_keys = tuple(sorted(set(tokens) & _SUPPORTED_TOKEN_KEYS))
-    except TypeError:
-        token_keys = ()
-    log = logger.info if token_keys else logger.warning
-    log(
-        "Streamlit OIDC token exposure status: token_container_exists=%s token_keys=%s",
-        True,
-        token_keys,
-    )
 
 
 def _user_display_name(user: object) -> str:
@@ -89,7 +61,6 @@ def configure_operator_identity(st, client: Only1ApiClient) -> dict | None:
     if st.sidebar.button("Logout"):
         st.logout()
         st.stop()
-    _log_token_exposure(user)
     token = _identity_token(user)
     if not token:
         st.sidebar.caption("Operator identity · Token unavailable")
