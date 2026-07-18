@@ -37,6 +37,12 @@ economics, missing operational inputs, safety behavior, API contracts, simulatio
 handoff, and deferred history design are documented in
 `docs/architecture/ADR-007-dispatch-recommendations.md`.
 
+Recommendation snapshots are captured only through an explicitly authenticated audit
+workflow; recommendation GET requests remain read-only. The additive history schema,
+stable relationships, linkage rules, outcomes, audit timeline, analytics safeguards,
+and manual migration procedure are documented in
+`docs/architecture/ADR-008-recommendation-history.md`.
+
 ## Repository
 
 The PUBBA Power platform source is hosted at [ThePubba/pubba-power-platform](https://github.com/ThePubba/pubba-power-platform).

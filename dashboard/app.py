@@ -9,7 +9,7 @@ from dashboard.components import (
     render_error_state,
     render_sidebar_brand,
 )
-from dashboard.pages import overview, simulations
+from dashboard.pages import overview, recommendation_history, simulations
 from dashboard.formatting import format_timestamp
 from dashboard.refresh import STATE_KEY
 
@@ -25,7 +25,7 @@ def main() -> None:
     render_sidebar_brand(st)
     st.sidebar.markdown('<span class="pubba-environment">Production</span>', unsafe_allow_html=True)
     page = st.sidebar.radio(
-        "Navigation", ["Overview", "Simulations"], index=0, label_visibility="collapsed"
+        "Navigation", ["Overview", "Simulations", "Recommendation History"], index=0, label_visibility="collapsed"
     )
     st.sidebar.divider()
     st.sidebar.caption("Portfolio intelligence and storage operations")
@@ -48,8 +48,10 @@ def main() -> None:
     )
     if page == "Overview":
         overview.render(st, client)
-    else:
+    elif page == "Simulations":
         simulations.render(st, client)
+    else:
+        recommendation_history.render(st, client)
     st.sidebar.divider()
     refreshed = cached.get("refreshed_at")
     if refreshed:

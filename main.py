@@ -5,7 +5,7 @@ import hmac
 import io
 import logging
 import os
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
 
@@ -23,19 +23,27 @@ from supabase import (
     aggregate_report,
     check_supabase_connectivity,
     create_asset,
+    create_recommendation_capture,
     create_telemetry,
     derive_idempotency_key,
     get_asset_performance,
     get_asset,
+    get_default_portfolio,
     get_latest_telemetry,
     get_latest_telemetry_for_source,
+    get_recommendation_history,
+    get_simulation_result,
+    get_dispatch_event_record,
     list_latest_telemetry_by_source,
     list_assets,
     list_dispatch_events,
     list_portfolio_latest_telemetry,
+    list_recommendation_history,
     list_telemetry_history,
+    find_recent_recommendation_capture,
     persist_simulation,
     update_asset,
+    update_recommendation_links,
 )
 from caiso import CaisoOasisError, fetch_lmp_data
 from simulation import StorageSimulationError, simulate_storage_profit
@@ -52,6 +60,11 @@ from services.telemetry_adapters import GenericJsonTelemetryAdapter
 from services.telemetry_ingestion import configured_batch_limit, ingest_batch
 from services.telemetry_sources import merge_source_runtime_health, source_runtime_registry
 from services.recommendations import rank_portfolio_recommendations
+from services.recommendation_history import (
+    history_analytics,
+    history_detail,
+    recommendation_snapshot,
+)
 
 
 SERVICE_NAME = "PUBBA Power API"
@@ -264,6 +277,14 @@ class TelemetryBatchRequest(BaseModel):
     observations: list[dict]
 
 
+class RecommendationLinkRequest(BaseModel):
+    record_id: str = Field(min_length=1)
+
+
+class RecommendationAcknowledgementRequest(BaseModel):
+    note: Optional[str] = Field(default=None, max_length=1000)
+
+
 class ReportPeriodResponse(BaseModel):
     period_start: str
     period_end: str
@@ -433,6 +454,15 @@ def _telemetry_writes_allowed(write_key: str | None) -> bool:
     }:
         return False
     expected = os.getenv("TELEMETRY_WRITE_TOKEN", "")
+    return bool(expected and write_key) and hmac.compare_digest(write_key, expected)
+
+
+def _recommendation_writes_allowed(write_key: str | None) -> bool:
+    if os.getenv("RECOMMENDATION_WRITES_ENABLED", "").strip().lower() not in {
+        "1", "true", "yes",
+    }:
+        return False
+    expected = os.getenv("RECOMMENDATION_WRITE_TOKEN", "")
     return bool(expected and write_key) and hmac.compare_digest(write_key, expected)
 
 
@@ -723,6 +753,211 @@ def create_app() -> FastAPI:
         if recommendation is None:
             raise ApiError(404, "asset_not_found", "Asset was not found", field="asset_id")
         return recommendation
+
+    def require_recommendation_write(write_key: str | None) -> None:
+        if not _recommendation_writes_allowed(write_key):
+            raise ApiError(
+                403, "recommendation_writes_disabled",
+                "Recommendation audit writes are disabled or not authorized",
+            )
+
+    def load_history_detail(recommendation_id: str) -> dict:
+        try:
+            record = get_recommendation_history(recommendation_id)
+            if not record:
+                raise ApiError(
+                    404, "recommendation_not_found",
+                    "Recommendation history record was not found",
+                )
+            simulation = (
+                get_simulation_result(str(record["simulation_id"]))
+                if record.get("simulation_id") else None
+            )
+            dispatch = (
+                get_dispatch_event_record(str(record["dispatch_id"]))
+                if record.get("dispatch_id") else None
+            )
+        except SupabaseError as exc:
+            _raise_supabase_api_error(exc)
+        return history_detail(record, simulation=simulation, dispatch=dispatch)
+
+    @app.post("/recommendations/{asset_id}/capture", status_code=201)
+    def capture_recommendation(
+        asset_id: str, response: Response,
+        x_recommendation_key: Optional[str] = Header(
+            default=None, alias="X-Recommendation-Key"
+        ),
+    ):
+        require_recommendation_write(x_recommendation_key)
+        current = current_recommendations()
+        item = next((
+            value for value in current["recommendations"]
+            if value["asset_id"] == asset_id
+        ), None)
+        if item is None:
+            raise ApiError(404, "asset_not_found", "Asset was not found", field="asset_id")
+        if item.get("market_status") != "fresh" or not item.get("estimated_economics"):
+            raise ApiError(
+                409, "recommendation_not_capturable",
+                "A fresh market recommendation is not currently available",
+            )
+        try:
+            portfolio = get_default_portfolio()
+            asset_record = get_asset(asset_id)
+            if not asset_record:
+                raise ApiError(404, "asset_not_found", "Asset was not found", field="asset_id")
+            snapshot = recommendation_snapshot(
+                item, portfolio_id=portfolio["id"], asset=asset_record
+            )
+            try:
+                duplicate_seconds = int(os.getenv("RECOMMENDATION_CAPTURE_DEDUP_SECONDS", "300"))
+            except ValueError as exc:
+                raise ApiError(
+                    500, "invalid_recommendation_configuration",
+                    "Recommendation capture configuration is invalid",
+                ) from exc
+            if duplicate_seconds < 0:
+                raise ApiError(
+                    500, "invalid_recommendation_configuration",
+                    "Recommendation capture configuration is invalid",
+                )
+            existing = find_recent_recommendation_capture(
+                asset_id=asset_id, snapshot_hash=snapshot["snapshot_hash"],
+                since=datetime.now(timezone.utc) - timedelta(seconds=duplicate_seconds),
+            )
+            if existing:
+                response.status_code = 200
+                return {"capture_status": "duplicate", "recommendation": existing}
+            created = create_recommendation_capture(snapshot)
+        except SupabaseError as exc:
+            _raise_supabase_api_error(exc)
+        return {"capture_status": "captured", "recommendation": created}
+
+    @app.get("/recommendations/history")
+    def recommendation_history(
+        portfolio_id: Optional[str] = None, asset_id: Optional[str] = None,
+        direction: Optional[str] = None,
+        start_time: Optional[datetime] = Query(default=None),
+        end_time: Optional[datetime] = Query(default=None),
+        minimum_score: Optional[int] = Query(default=None, ge=0, le=100),
+        linked_simulation: Optional[bool] = None,
+        linked_dispatch: Optional[bool] = None,
+        limit: int = Query(default=100, ge=1, le=1000),
+        offset: int = Query(default=0, ge=0),
+    ):
+        if direction and direction not in {"charge", "discharge", "hold", "insufficient_data"}:
+            raise ApiError(400, "invalid_direction", "Unknown recommendation direction", field="direction")
+        for field, value in (("start_time", start_time), ("end_time", end_time)):
+            if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+                raise ApiError(400, "invalid_timestamp", f"{field} must include a timezone offset", field=field)
+        if start_time and end_time and start_time > end_time:
+            raise ApiError(400, "invalid_date_range", "start_time must be on or before end_time")
+        try:
+            records = list_recommendation_history(
+                portfolio_id=portfolio_id, asset_id=asset_id, direction=direction,
+                start_at=start_time, end_at=end_time, minimum_score=minimum_score,
+                linked_simulation=linked_simulation, linked_dispatch=linked_dispatch,
+                limit=limit, offset=offset,
+            )
+        except SupabaseError as exc:
+            _raise_supabase_api_error(exc)
+        return {"records": records, "count": len(records), "limit": limit, "offset": offset}
+
+    @app.get("/recommendations/history/analytics")
+    def recommendation_history_portfolio_analytics():
+        try:
+            portfolio = get_default_portfolio()
+            records = list_recommendation_history(
+                portfolio_id=portfolio["id"], limit=1000
+            )
+            enriched = []
+            for record in records:
+                dispatch = (
+                    get_dispatch_event_record(str(record["dispatch_id"]))
+                    if record.get("dispatch_id") else None
+                )
+                enriched.append(history_detail(record, dispatch=dispatch))
+        except SupabaseError as exc:
+            _raise_supabase_api_error(exc)
+        return history_analytics(enriched)
+
+    @app.get("/recommendations/history/{recommendation_id}")
+    def recommendation_history_detail(recommendation_id: str):
+        return load_history_detail(recommendation_id)
+
+    @app.post("/recommendations/history/{recommendation_id}/acknowledge")
+    def acknowledge_recommendation(
+        recommendation_id: str, request: RecommendationAcknowledgementRequest,
+        x_recommendation_key: Optional[str] = Header(default=None, alias="X-Recommendation-Key"),
+    ):
+        require_recommendation_write(x_recommendation_key)
+        detail = load_history_detail(recommendation_id)
+        if detail.get("acknowledged_at"):
+            raise ApiError(409, "recommendation_already_acknowledged", "Recommendation was already acknowledged")
+        try:
+            updated = update_recommendation_links(recommendation_id, {
+                "acknowledged_at": datetime.now(timezone.utc).isoformat(),
+                "acknowledgement_note": request.note,
+                "acknowledgement_attribution": "authenticated_operator_workflow",
+            })
+        except SupabaseError as exc:
+            _raise_supabase_api_error(exc)
+        return history_detail(updated)
+
+    @app.post("/recommendations/history/{recommendation_id}/link-simulation")
+    def link_recommendation_simulation(
+        recommendation_id: str, request: RecommendationLinkRequest,
+        x_recommendation_key: Optional[str] = Header(default=None, alias="X-Recommendation-Key"),
+    ):
+        require_recommendation_write(x_recommendation_key)
+        detail = load_history_detail(recommendation_id)
+        if detail.get("simulation_id"):
+            if str(detail["simulation_id"]) == request.record_id:
+                return detail
+            raise ApiError(409, "simulation_already_linked", "Recommendation already has a simulation link")
+        try:
+            simulation = get_simulation_result(request.record_id)
+            if not simulation:
+                raise ApiError(404, "simulation_not_found", "Simulation was not found")
+            if simulation.get("portfolio_id") != detail.get("portfolio_id") or (
+                simulation.get("asset_id") and simulation.get("asset_id") != detail.get("asset_id")
+            ):
+                raise ApiError(409, "simulation_link_mismatch", "Simulation does not match recommendation ownership")
+            updated = update_recommendation_links(recommendation_id, {
+                "simulation_id": simulation["id"],
+                "simulation_linked_at": datetime.now(timezone.utc).isoformat(),
+            })
+        except SupabaseError as exc:
+            _raise_supabase_api_error(exc)
+        return history_detail(updated, simulation=simulation, dispatch=detail.get("dispatch"))
+
+    @app.post("/recommendations/history/{recommendation_id}/link-dispatch")
+    def link_recommendation_dispatch(
+        recommendation_id: str, request: RecommendationLinkRequest,
+        x_recommendation_key: Optional[str] = Header(default=None, alias="X-Recommendation-Key"),
+    ):
+        require_recommendation_write(x_recommendation_key)
+        detail = load_history_detail(recommendation_id)
+        if detail.get("dispatch_id"):
+            if str(detail["dispatch_id"]) == request.record_id:
+                return detail
+            raise ApiError(409, "dispatch_already_linked", "Recommendation already has a dispatch link")
+        try:
+            dispatch = get_dispatch_event_record(request.record_id)
+            if not dispatch:
+                raise ApiError(404, "dispatch_not_found", "Dispatch was not found")
+            if (
+                dispatch.get("portfolio_id") != detail.get("portfolio_id")
+                or dispatch.get("asset_id") != detail.get("asset_id")
+            ):
+                raise ApiError(409, "dispatch_link_mismatch", "Dispatch does not match recommendation ownership")
+            updated = update_recommendation_links(recommendation_id, {
+                "dispatch_id": dispatch["id"],
+                "dispatch_linked_at": datetime.now(timezone.utc).isoformat(),
+            })
+        except SupabaseError as exc:
+            _raise_supabase_api_error(exc)
+        return history_detail(updated, simulation=detail.get("simulation"), dispatch=dispatch)
 
     @app.post("/telemetry", status_code=201)
     def add_telemetry(

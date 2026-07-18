@@ -134,6 +134,26 @@ def test_recommendation_client_requires_advisory_contract():
         malformed.get_portfolio_recommendations()
 
 
+def test_recommendation_history_client_handles_empty_and_detail_contracts():
+    empty_session = Session(Response({"records": [], "count": 0}))
+    client = Only1ApiClient("https://api.example.test", session=empty_session)
+    assert client.get_recommendation_history(limit=25) == []
+    assert empty_session.calls[0][1].endswith("/recommendations/history")
+    assert empty_session.calls[0][2]["params"] == {"limit": 25}
+
+    detail = {"id": "history-1", "outcome": {"status": "no_action_taken"}}
+    detail_client = Only1ApiClient(
+        "https://api.example.test", session=Session(Response(detail))
+    )
+    assert detail_client.get_recommendation_history_detail("history-1") == detail
+
+    analytics = {"sample_size": 0, "accuracy_available": False}
+    analytics_client = Only1ApiClient(
+        "https://api.example.test", session=Session(Response(analytics))
+    )
+    assert analytics_client.get_recommendation_history_analytics() == analytics
+
+
 @pytest.mark.parametrize(
     ("error", "code"),
     [(requests.Timeout(), "timeout"), (requests.ConnectionError(), "connection_error")],
@@ -283,3 +303,28 @@ def test_dashboard_module_import_does_not_make_network_call(monkeypatch):
     import dashboard.app
 
     assert callable(dashboard.app.main)
+
+
+def test_recommendation_history_page_renders_empty_state(monkeypatch):
+    from dashboard.pages import recommendation_history
+
+    monkeypatch.setattr(recommendation_history, "render_page_header", lambda *args, **kwargs: None)
+    monkeypatch.setattr(recommendation_history, "render_section_header", lambda *args, **kwargs: None)
+    monkeypatch.setattr(recommendation_history, "render_summary_grid", lambda *args, **kwargs: None)
+
+    class St:
+        captions = []
+        infos = []
+        def caption(self, value): self.captions.append(value)
+        def info(self, value): self.infos.append(value)
+        def warning(self, value): raise AssertionError(value)
+
+    class Client:
+        def get_recommendation_history(self, **kwargs): return []
+        def get_recommendation_history_analytics(self):
+            return {"sample_size": 0, "accuracy_message": "Insufficient history"}
+
+    st = St()
+    recommendation_history.render(st, Client())
+    assert st.infos == ["No recommendations have been explicitly captured."]
+    assert "Insufficient history" in st.captions

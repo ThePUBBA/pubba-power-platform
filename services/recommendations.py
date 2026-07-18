@@ -15,6 +15,7 @@ ADVISORY_NOTICE = (
     "Advisory market analysis only. This recommendation does not execute dispatch "
     "or a market transaction and does not guarantee profit."
 )
+RECOMMENDATION_ENGINE_VERSION = "1.0"
 
 
 @dataclass(frozen=True)
@@ -178,12 +179,16 @@ def recommend_asset(
             "market_price_per_mwh": current,
             "market_status": market_status,
             "market_age_seconds": market_age,
+            "market_timestamp": market.get("updated_at"),
             "opportunity_score": 0,
             "recommendation": "Insufficient operational data",
+            "recommendation_direction": "insufficient_data",
             "market_opportunity": "No current market opportunity is issued.",
             "estimated_economics": None,
             "operational_readiness": readiness,
             "telemetry_status": telemetry_status,
+            "telemetry_available": bool(telemetry),
+            "telemetry_timestamp": telemetry.get("recorded_at") if telemetry else None,
             "primary_drivers": [], "risks": risks,
             "missing_operational_data": missing,
             "explanation": risks[0] if risks else "Required inputs are unavailable.",
@@ -191,6 +196,7 @@ def recommend_asset(
             "simulation_inputs": None,
             "advisory_notice": ADVISORY_NOTICE,
             "generated_at": generated.isoformat(),
+            "recommendation_engine_version": RECOMMENDATION_ENGINE_VERSION,
             "actionable": False,
         }
 
@@ -247,14 +253,18 @@ def recommend_asset(
         "market_price_per_mwh": current,
         "market_status": market_status,
         "market_age_seconds": market_age,
+        "market_timestamp": market.get("updated_at"),
         "market_price_percentile": percentile,
         "recent_price_movement_per_mwh": movement,
         "opportunity_score": score,
         "recommendation": recommendation,
+        "recommendation_direction": direction,
         "market_opportunity": market_opportunity,
         "estimated_economics": economics,
         "operational_readiness": readiness,
         "telemetry_status": telemetry_status,
+        "telemetry_available": bool(telemetry),
+        "telemetry_timestamp": telemetry.get("recorded_at") if telemetry else None,
         "primary_drivers": drivers,
         "risks": risks,
         "missing_operational_data": missing,
@@ -275,6 +285,7 @@ def recommend_asset(
         },
         "advisory_notice": ADVISORY_NOTICE,
         "generated_at": generated.isoformat(),
+        "recommendation_engine_version": RECOMMENDATION_ENGINE_VERSION,
         "actionable": bool(
             telemetry
             and telemetry_status == "fresh"

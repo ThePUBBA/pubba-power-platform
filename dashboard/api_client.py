@@ -152,6 +152,39 @@ class Only1ApiClient:
             )
         return payload
 
+    def get_recommendation_history(self, **filters: Any) -> list[dict]:
+        params = {
+            key: value for key, value in filters.items()
+            if value not in (None, "")
+        }
+        payload = self._request("get", "/recommendations/history", params=params)
+        if not isinstance(payload, dict) or not isinstance(payload.get("records"), list):
+            raise DashboardApiError(
+                "The backend returned invalid recommendation history.",
+                code="invalid_response",
+            )
+        return [item for item in payload["records"] if isinstance(item, dict)]
+
+    def get_recommendation_history_detail(self, recommendation_id: str) -> dict:
+        payload = self._request(
+            "get", f"/recommendations/history/{recommendation_id}"
+        )
+        if not isinstance(payload, dict) or payload.get("id") != recommendation_id:
+            raise DashboardApiError(
+                "The backend returned invalid recommendation history detail.",
+                code="invalid_response",
+            )
+        return payload
+
+    def get_recommendation_history_analytics(self) -> dict:
+        payload = self._request("get", "/recommendations/history/analytics")
+        if not isinstance(payload, dict) or "sample_size" not in payload:
+            raise DashboardApiError(
+                "The backend returned invalid recommendation analytics.",
+                code="invalid_response",
+            )
+        return payload
+
     def _request(self, method: str, path: str, **kwargs: Any) -> Any:
         started = perf_counter()
         try:

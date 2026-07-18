@@ -286,6 +286,110 @@ def list_portfolio_latest_telemetry() -> list[dict]:
     )
 
 
+def find_recent_recommendation_capture(
+    *, asset_id: str, snapshot_hash: str, since: datetime,
+) -> dict | None:
+    records = _request(
+        "get", "recommendation_history",
+        params={
+            "select": "*", "asset_id": f"eq.{asset_id}",
+            "snapshot_hash": f"eq.{snapshot_hash}",
+            "captured_at": f"gte.{since.isoformat()}",
+            "order": "captured_at.desc,id.desc", "limit": 1,
+        },
+    )
+    return records[0] if records else None
+
+
+def create_recommendation_capture(fields: dict) -> dict:
+    records = _request(
+        "post", "recommendation_history", json_body=fields,
+        prefer="return=representation",
+    )
+    if not records:
+        raise SupabaseError(
+            "Supabase returned no recommendation after capture",
+            error_code="malformed_supabase_response",
+            operation="capture_recommendation",
+        )
+    return records[0]
+
+
+def list_recommendation_history(
+    *, portfolio_id: str | None = None, asset_id: str | None = None,
+    direction: str | None = None, start_at: datetime | None = None,
+    end_at: datetime | None = None, minimum_score: int | None = None,
+    linked_simulation: bool | None = None, linked_dispatch: bool | None = None,
+    limit: int = 100, offset: int = 0,
+) -> list[dict]:
+    params: dict[str, Any] = {
+        "select": "*", "order": "generated_at.desc,id.desc",
+        "limit": limit, "offset": offset,
+    }
+    if portfolio_id:
+        params["portfolio_id"] = f"eq.{portfolio_id}"
+    if asset_id:
+        params["asset_id"] = f"eq.{asset_id}"
+    if direction:
+        params["recommendation_direction"] = f"eq.{direction}"
+    if start_at:
+        params["generated_at"] = f"gte.{start_at.isoformat()}"
+    if end_at:
+        end_filter = f"lte.{end_at.isoformat()}"
+        if "generated_at" in params:
+            params["and"] = (
+                f"(generated_at.{params.pop('generated_at')},generated_at.{end_filter})"
+            )
+        else:
+            params["generated_at"] = end_filter
+    if minimum_score is not None:
+        params["opportunity_score"] = f"gte.{minimum_score}"
+    if linked_simulation is not None:
+        params["simulation_id"] = "not.is.null" if linked_simulation else "is.null"
+    if linked_dispatch is not None:
+        params["dispatch_id"] = "not.is.null" if linked_dispatch else "is.null"
+    return _request("get", "recommendation_history", params=params)
+
+
+def get_recommendation_history(recommendation_id: str) -> dict | None:
+    records = _request(
+        "get", "recommendation_history",
+        params={"select": "*", "id": f"eq.{recommendation_id}", "limit": 1},
+    )
+    return records[0] if records else None
+
+
+def get_simulation_result(simulation_id: str) -> dict | None:
+    records = _request(
+        "get", "simulation_results",
+        params={"select": "*", "id": f"eq.{simulation_id}", "limit": 1},
+    )
+    return records[0] if records else None
+
+
+def get_dispatch_event_record(dispatch_record_id: str) -> dict | None:
+    records = _request(
+        "get", "dispatch_events",
+        params={"select": "*", "id": f"eq.{dispatch_record_id}", "limit": 1},
+    )
+    return records[0] if records else None
+
+
+def update_recommendation_links(recommendation_id: str, fields: dict) -> dict:
+    records = _request(
+        "patch", "recommendation_history",
+        params={"id": f"eq.{recommendation_id}"}, json_body=fields,
+        prefer="return=representation",
+    )
+    if not records:
+        raise SupabaseError(
+            "Recommendation history record was not found",
+            error_code="missing_recommendation", status_code=404,
+            operation="update_recommendation_links",
+        )
+    return records[0]
+
+
 def list_dispatch_events(
     *,
     start_date: date | None = None,
