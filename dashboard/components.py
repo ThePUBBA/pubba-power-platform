@@ -560,6 +560,54 @@ def install_console_theme(st, theme) -> None:
         [data-baseweb="select"] > div,
         [data-testid="stDateInput"] [data-baseweb="input"] > div {{
             background: var(--input-bg) !important;
+            color: var(--text-primary) !important;
+        }}
+        [data-baseweb="input"] input,
+        [data-baseweb="input"] textarea,
+        [data-baseweb="select"] input,
+        [data-baseweb="select"] span,
+        [data-testid="stTextInput"] input,
+        [data-testid="stNumberInput"] input,
+        [data-testid="stDateInput"] input {{
+            color: var(--text-primary) !important;
+            -webkit-text-fill-color: var(--text-primary) !important;
+        }}
+        [data-baseweb="input"] input::placeholder,
+        [data-testid="stTextInput"] input::placeholder {{
+            color: var(--text-muted) !important;
+            -webkit-text-fill-color: var(--text-muted) !important;
+            opacity: 1;
+        }}
+        [data-testid="stWidgetLabel"],
+        [data-testid="stWidgetLabel"] p,
+        [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
+        [data-testid="stSidebar"] [role="radiogroup"] label,
+        [data-testid="stSidebar"] [role="radiogroup"] label p {{
+            color: var(--text-primary) !important;
+        }}
+        [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked),
+        [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) p {{
+            color: var(--accent) !important;
+        }}
+        [data-testid="stSidebar"] [data-testid="stCaptionContainer"],
+        [data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {{
+            color: var(--text-muted) !important;
+        }}
+        [data-testid="stSegmentedControl"] button {{
+            background: var(--bg-surface-secondary) !important;
+            border-color: var(--border-default) !important;
+            color: var(--text-primary) !important;
+        }}
+        [data-testid="stSegmentedControl"] button * {{
+            color: var(--text-primary) !important;
+        }}
+        [data-testid="stSegmentedControl"] button[aria-pressed="true"] {{
+            background: var(--accent) !important;
+            border-color: var(--accent) !important;
+            color: var(--accent-foreground) !important;
+        }}
+        [data-testid="stSegmentedControl"] button[aria-pressed="true"] * {{
+            color: var(--accent-foreground) !important;
         }}
         [data-baseweb="popover"], [role="listbox"], [role="dialog"] {{
             background: var(--bg-surface) !important;
