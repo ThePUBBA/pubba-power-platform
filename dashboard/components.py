@@ -418,10 +418,16 @@ def install_console_theme(st) -> None:
             color: #000 !important;
         }
         .stButton > button[kind="primary"],
-        .stFormSubmitButton > button[kind="primary"] {
+        .stFormSubmitButton > button[kind="primary"],
+        button[data-testid="stBaseButton-primary"] {
             color: #000 !important;
             background: var(--pubba-accent) !important;
             border-color: var(--pubba-accent) !important;
+        }
+        .stButton > button[kind="primary"] *,
+        .stFormSubmitButton > button[kind="primary"] *,
+        button[data-testid="stBaseButton-primary"] * {
+            color: #000 !important;
         }
         .stButton > button:hover, .stFormSubmitButton > button:hover {
             transform: translateY(-1px);
