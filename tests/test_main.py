@@ -577,6 +577,9 @@ def test_portfolio_assets_endpoint_identifies_supabase_timeout(monkeypatch):
 
 def test_asset_creation_returns_structured_duplicate_error(monkeypatch):
     import main
+    from tests.test_operator_auth import AUTH_HEADERS, configure_auth
+
+    configure_auth(monkeypatch, role="admin")
 
     monkeypatch.setattr(
         main,
@@ -585,7 +588,8 @@ def test_asset_creation_returns_structured_duplicate_error(monkeypatch):
     )
 
     response = TestClient(main.app).post(
-        "/assets", json={"asset_id": "BAT-001", "asset_name": "Battery"}
+        "/assets", headers=AUTH_HEADERS,
+        json={"asset_id": "BAT-001", "asset_name": "Battery"},
     )
 
     assert response.status_code == 409
@@ -598,6 +602,9 @@ def test_asset_creation_returns_structured_duplicate_error(monkeypatch):
 
 def test_asset_management_endpoints_use_supabase_service(monkeypatch):
     import main
+    from tests.test_operator_auth import AUTH_HEADERS, configure_auth
+
+    configure_auth(monkeypatch, role="admin")
 
     monkeypatch.setattr(
         main,
@@ -617,12 +624,15 @@ def test_asset_management_endpoints_use_supabase_service(monkeypatch):
     )
     client = TestClient(main.app)
 
-    assert client.get("/assets").json()[0]["asset_id"] == "BAT-001"
-    assert client.get("/assets/BAT-001").status_code == 200
+    assert client.get("/assets", headers=AUTH_HEADERS).json()[0]["asset_id"] == "BAT-001"
+    assert client.get("/assets/BAT-001", headers=AUTH_HEADERS).status_code == 200
     created = client.post(
-        "/assets", json={"asset_id": "BAT-002", "asset_name": "Second"}
+        "/assets", headers=AUTH_HEADERS,
+        json={"asset_id": "BAT-002", "asset_name": "Second"},
     )
-    updated = client.patch("/assets/BAT-002", json={"status": "inactive"})
+    updated = client.patch(
+        "/assets/BAT-002", headers=AUTH_HEADERS, json={"status": "inactive"},
+    )
 
     assert created.status_code == 201
     assert created.json()["id"] == "asset-uuid"

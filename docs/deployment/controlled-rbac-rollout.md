@@ -35,6 +35,7 @@ claim that all reads are portfolio-isolated.
 | Link/review simulation | No | Yes | Yes | Yes |
 | Approve or reject | No | No | Yes | Yes |
 | Link dispatch evidence | No | No | Yes | Yes |
+| Create/update assets | No | No | No | Yes |
 | Read operator directory | No | No | No | Yes |
 | Create/update operators | No | No | No | Yes |
 | Manage portfolio assignments | No | No | No | Yes |
@@ -55,12 +56,14 @@ the default portfolio; multiple assignments require explicit selection; no assig
 returns a non-disclosing 404. Unauthorized portfolio reads and writes return 404 before
 downstream linked-object lookup. Admin can list and access multiple portfolios globally.
 
-The API currently applies portfolio scoping to dashboard/portfolio summaries,
-recommendations/history, simulations, and dispatch-list reads. Legacy asset detail,
-telemetry detail/health, report, LMP/arbitrage, dispatch CSV export, and simulation
-execution routes are not yet uniformly portfolio-authorized. Full-platform enforce mode
-must not be approved until owners either accept this compatibility boundary explicitly
-or complete route-by-route portfolio authorization.
+The API applies auth-mode evaluation to every user-facing read, export, market,
+telemetry, and simulation route. In `enforce` mode these routes require an active,
+provisioned operator; `off` and `shadow` preserve the documented compatibility behavior.
+The root and infrastructure health routes remain public, and machine telemetry ingestion
+continues to use its separate write flag and token. Portfolio scoping currently applies
+to dashboard/portfolio summaries, recommendations/history, simulations, and dispatch-list
+reads. Full portfolio isolation for the remaining authenticated global reads is a later
+rollout phase and is not implied by operator-level authentication.
 
 ## Feature flags
 

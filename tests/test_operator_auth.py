@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+import pytest
 
 import main
 from dashboard.auth import can
@@ -149,6 +150,19 @@ def test_recommendation_write_flags_fail_closed(monkeypatch):
     assert no_storage.json()["error_code"] == "operator_audit_storage_disabled"
 
 
+def test_admin_cannot_bypass_disabled_recommendation_writes(monkeypatch):
+    configure_auth(monkeypatch, role="admin")
+    monkeypatch.setenv("RECOMMENDATION_WRITES_ENABLED", "false")
+    monkeypatch.setenv("OPERATOR_RBAC_STORAGE_ENABLED", "true")
+
+    response = TestClient(main.app).post(
+        "/recommendations/BAT-1/capture", headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error_code"] == "recommendation_writes_disabled"
+
+
 def test_operator_cannot_link_dispatch_even_with_spoofed_role_header(monkeypatch):
     configure_workflow_storage(monkeypatch, role="operator")
     response = TestClient(main.app).post(
@@ -282,9 +296,59 @@ def test_backend_role_permission_matrix_is_exact():
             "recommendations:link_simulation",
             "recommendations:approve",
             "recommendations:link_dispatch",
+            "assets:manage",
             "operators:manage",
         }),
     }
+
+
+@pytest.mark.parametrize("role", ["viewer", "operator", "approver"])
+@pytest.mark.parametrize(
+    ("method", "path", "payload"),
+    [
+        ("post", "/assets", {"asset_id": "BAT-RBAC", "asset_name": "RBAC Battery"}),
+        ("patch", "/assets/BAT-RBAC", {"status": "inactive"}),
+    ],
+)
+def test_non_admin_asset_management_is_backend_denied(
+    monkeypatch, role, method, path, payload,
+):
+    configure_auth(monkeypatch, role=role)
+    response = getattr(TestClient(main.app), method)(
+        path, headers=AUTH_HEADERS, json=payload,
+    )
+    assert response.status_code == 403
+    assert response.json()["error_code"] == "operator_forbidden"
+
+
+def test_asset_management_requires_authentication():
+    response = TestClient(main.app).patch(
+        "/assets/BAT-RBAC", json={"status": "inactive"},
+    )
+    assert response.status_code == 401
+    assert response.json()["error_code"] == "authentication_required"
+
+
+def test_admin_asset_management_is_backend_authorized(monkeypatch):
+    configure_auth(monkeypatch, role="admin")
+    monkeypatch.setattr(
+        main, "create_asset", lambda fields: {"id": "asset-uuid", **fields},
+    )
+    monkeypatch.setattr(
+        main, "update_asset", lambda asset_id, fields: {"asset_id": asset_id, **fields},
+    )
+    client = TestClient(main.app)
+
+    created = client.post(
+        "/assets", headers=AUTH_HEADERS,
+        json={"asset_id": "BAT-RBAC", "asset_name": "RBAC Battery"},
+    )
+    updated = client.patch(
+        "/assets/BAT-RBAC", headers=AUTH_HEADERS, json={"status": "inactive"},
+    )
+
+    assert created.status_code == 201
+    assert updated.status_code == 200
 
 
 def test_principal_public_shape_does_not_expose_internal_identity():

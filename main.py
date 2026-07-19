@@ -898,6 +898,7 @@ def create_app() -> FastAPI:
     def assets(
         limit: int = Query(default=100, ge=1, le=1000),
         offset: int = Query(default=0, ge=0),
+        principal: OperatorPrincipal | None = Depends(optional_read_operator),
     ):
         try:
             return list_assets(limit=limit, offset=offset)
@@ -905,7 +906,10 @@ def create_app() -> FastAPI:
             _raise_supabase_api_error(exc)
 
     @app.get("/assets/{asset_id}")
-    def asset(asset_id: str):
+    def asset(
+        asset_id: str,
+        principal: OperatorPrincipal | None = Depends(optional_read_operator),
+    ):
         try:
             record = get_asset(asset_id)
         except SupabaseError as exc:
@@ -915,14 +919,21 @@ def create_app() -> FastAPI:
         return record
 
     @app.post("/assets", status_code=201)
-    def add_asset(request: AssetCreateRequest):
+    def add_asset(
+        request: AssetCreateRequest,
+        principal: OperatorPrincipal = Depends(require_permission("assets:manage")),
+    ):
         try:
             return create_asset(request.model_dump())
         except SupabaseError as exc:
             _raise_supabase_api_error(exc)
 
     @app.patch("/assets/{asset_id}")
-    def patch_asset(asset_id: str, request: AssetUpdateRequest):
+    def patch_asset(
+        asset_id: str,
+        request: AssetUpdateRequest,
+        principal: OperatorPrincipal = Depends(require_permission("assets:manage")),
+    ):
         fields = request.model_dump(exclude_unset=True)
         if not fields:
             raise ApiError(
@@ -936,7 +947,10 @@ def create_app() -> FastAPI:
             _raise_supabase_api_error(exc)
 
     @app.get("/telemetry/assets/{asset_id}/latest")
-    def latest_asset_telemetry(asset_id: str):
+    def latest_asset_telemetry(
+        asset_id: str,
+        principal: OperatorPrincipal | None = Depends(optional_read_operator),
+    ):
         try:
             return {"asset_id": asset_id, **_telemetry_response(get_latest_telemetry(asset_id))}
         except SupabaseError as exc:
@@ -948,6 +962,7 @@ def create_app() -> FastAPI:
         start_time: Optional[datetime] = Query(default=None),
         end_time: Optional[datetime] = Query(default=None),
         limit: int = Query(default=500, ge=1, le=5000),
+        principal: OperatorPrincipal | None = Depends(optional_read_operator),
     ):
         for field, value in (("start_time", start_time), ("end_time", end_time)):
             if value is not None and (value.tzinfo is None or value.utcoffset() is None):
@@ -975,7 +990,9 @@ def create_app() -> FastAPI:
         }
 
     @app.get("/telemetry/portfolio/latest")
-    def portfolio_latest_telemetry():
+    def portfolio_latest_telemetry(
+        principal: OperatorPrincipal | None = Depends(optional_read_operator),
+    ):
         try:
             records = list_portfolio_latest_telemetry()
         except SupabaseError as exc:
@@ -989,7 +1006,9 @@ def create_app() -> FastAPI:
         }
 
     @app.get("/telemetry/sources/health")
-    def telemetry_sources_health():
+    def telemetry_sources_health(
+        principal: OperatorPrincipal | None = Depends(optional_read_operator),
+    ):
         configured = [
             item.strip()
             for item in os.getenv("TELEMETRY_CONFIGURED_SOURCES", "").split(",")
@@ -1694,6 +1713,7 @@ def create_app() -> FastAPI:
         market: Optional[str] = None,
         location: Optional[str] = None,
         status: Optional[str] = None,
+        principal: OperatorPrincipal | None = Depends(optional_read_operator),
     ):
         _validate_date_range(start_date, end_date)
         try:
@@ -1751,31 +1771,41 @@ def create_app() -> FastAPI:
 
     @app.get("/reports/daily", response_model=list[ReportPeriodResponse])
     def daily_report(
-        start_date: Optional[date] = None, end_date: Optional[date] = None
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        principal: OperatorPrincipal | None = Depends(optional_read_operator),
     ):
         return report("daily", start_date, end_date)
 
     @app.get("/reports/weekly", response_model=list[ReportPeriodResponse])
     def weekly_report(
-        start_date: Optional[date] = None, end_date: Optional[date] = None
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        principal: OperatorPrincipal | None = Depends(optional_read_operator),
     ):
         return report("weekly", start_date, end_date)
 
     @app.get("/reports/monthly", response_model=list[ReportPeriodResponse])
     def monthly_report(
-        start_date: Optional[date] = None, end_date: Optional[date] = None
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        principal: OperatorPrincipal | None = Depends(optional_read_operator),
     ):
         return report("monthly", start_date, end_date)
 
     @app.get("/reports/quarterly", response_model=list[ReportPeriodResponse])
     def quarterly_report(
-        start_date: Optional[date] = None, end_date: Optional[date] = None
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        principal: OperatorPrincipal | None = Depends(optional_read_operator),
     ):
         return report("quarterly", start_date, end_date)
 
     @app.get("/reports/yearly", response_model=list[ReportPeriodResponse])
     def yearly_report(
-        start_date: Optional[date] = None, end_date: Optional[date] = None
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        principal: OperatorPrincipal | None = Depends(optional_read_operator),
     ):
         return report("yearly", start_date, end_date)
 
@@ -1784,6 +1814,7 @@ def create_app() -> FastAPI:
         market: str = "RTM",
         location: str = "TH_NP15_GEN-APND",
         date: Optional[str] = None,
+        principal: OperatorPrincipal | None = Depends(optional_read_operator),
     ):
         try:
             df = fetch_lmp_data(location=location, market=market, date=date)
@@ -1800,6 +1831,7 @@ def create_app() -> FastAPI:
         date: Optional[str] = None,
         duration_hours: float = 8,
         round_trip_efficiency: float = 0.80,
+        principal: OperatorPrincipal | None = Depends(optional_read_operator),
     ):
         try:
             df = fetch_lmp_data(location=location, market=market, date=date)
@@ -1830,6 +1862,7 @@ def create_app() -> FastAPI:
         cycles: float = Query(default=1, gt=0),
         storage_fee_per_mwh: float = Query(default=0, ge=0),
         variable_om_per_mwh: float = Query(default=0, ge=0),
+        principal: OperatorPrincipal | None = Depends(optional_read_operator),
     ):
         return _run_simulation(
             SimulationRequest(
@@ -1849,6 +1882,7 @@ def create_app() -> FastAPI:
     def post_simulation(
         request: SimulationRequest,
         idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+        principal: OperatorPrincipal | None = Depends(optional_read_operator),
     ):
         result = _run_simulation(request)
         persistence = _persist_completed_simulation(

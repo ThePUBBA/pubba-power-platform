@@ -20,7 +20,7 @@ ROLE_PERMISSIONS = {
     "viewer": frozenset({"recommendations:read"}),
     "operator": frozenset({"recommendations:read", "recommendations:capture", "recommendations:acknowledge", "recommendations:link_simulation"}),
     "approver": frozenset({"recommendations:read", "recommendations:capture", "recommendations:acknowledge", "recommendations:link_simulation", "recommendations:approve", "recommendations:link_dispatch"}),
-    "admin": frozenset({"recommendations:read", "recommendations:capture", "recommendations:acknowledge", "recommendations:link_simulation", "recommendations:approve", "recommendations:link_dispatch", "operators:manage"}),
+    "admin": frozenset({"recommendations:read", "recommendations:capture", "recommendations:acknowledge", "recommendations:link_simulation", "recommendations:approve", "recommendations:link_dispatch", "assets:manage", "operators:manage"}),
 }
 
 
