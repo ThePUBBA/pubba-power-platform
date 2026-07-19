@@ -404,6 +404,7 @@ def install_console_theme(st) -> None:
         .stButton > button, .stFormSubmitButton > button {
             min-height: 2.65rem;
             border-radius: 10px;
+            color: #000 !important;
             font-family: var(--font-display);
             font-size: 1rem;
             font-weight: 400;
@@ -411,6 +412,9 @@ def install_console_theme(st) -> None:
             text-transform: uppercase;
             border: 1px solid var(--pubba-border);
             transition: transform .15s ease, border-color .15s ease, opacity .15s ease;
+        }
+        .stButton > button *, .stFormSubmitButton > button * {
+            color: #000 !important;
         }
         .stButton > button[kind="primary"],
         .stFormSubmitButton > button[kind="primary"] {
