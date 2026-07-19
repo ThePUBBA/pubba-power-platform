@@ -139,6 +139,22 @@ def test_fetch_lmp_data_rejects_invalid_date():
         fetch_lmp_data(date="04/01/2025")
 
 
+def test_fetch_lmp_data_supports_a_bounded_multi_day_window(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(caiso, "_request_oasis", lambda params: captured.update(params) or b"zip")
+    monkeypatch.setattr(caiso, "_parse_oasis_zip", lambda content: pd.DataFrame())
+
+    fetch_lmp_data(date="2025-04-01", days=2)
+
+    assert captured["startdatetime"] == "20250401T07:00-0000"
+    assert captured["enddatetime"] == "20250403T07:00-0000"
+
+
+def test_fetch_lmp_data_rejects_invalid_days():
+    with pytest.raises(ValueError, match="days must be"):
+        fetch_lmp_data(date="2025-04-01", days=32)
+
+
 def test_fetch_lmp_data_rejects_invalid_market():
     with pytest.raises(ValueError, match="market must be one of"):
         fetch_lmp_data(market="BAD", date="2025-04-01")

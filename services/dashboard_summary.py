@@ -129,8 +129,8 @@ def _market_snapshot(
     market_loader: Callable[..., object],
     trade_date: str,
 ) -> dict:
-    def load_points(date: str) -> list[dict]:
-        frame = market_loader(location=location, market="RTM", date=date)
+    def load_points(date: str, *, days: int = 1) -> list[dict]:
+        frame = market_loader(location=location, market="RTM", date=date, days=days)
         records = frame.to_dict(orient="records")
         points = [
             {"timestamp": row.get("timestamp"), "price_per_mwh": row.get("lmp_prc")}
@@ -141,16 +141,20 @@ def _market_snapshot(
         return points
 
     try:
-        points = load_points(trade_date)
-        if not points:
-            raise CaisoOasisError("CAISO OASIS returned no usable price points")
         previous_date = (
             datetime.fromisoformat(trade_date).date() - timedelta(days=1)
         ).isoformat()
-        try:
-            previous_points = load_points(previous_date)
-        except (CaisoOasisError, ValueError, AttributeError, TypeError):
-            previous_points = []
+        combined_points = load_points(previous_date, days=2)
+        points = [
+            point for point in combined_points
+            if str(point.get("timestamp", ""))[:10] == trade_date
+        ]
+        previous_points = [
+            point for point in combined_points
+            if str(point.get("timestamp", ""))[:10] == previous_date
+        ]
+        if not points:
+            raise CaisoOasisError("CAISO OASIS returned no usable price points")
         return {
             "status": "connected",
             "location": location,

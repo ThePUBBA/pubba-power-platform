@@ -27,12 +27,15 @@ def fetch_lmp_data(
     location: str = "TH_NP15_GEN-APND",
     market: str = "RTM",
     date: Optional[str] = None,
+    days: int = 1,
 ) -> pd.DataFrame:
     """Fetch CAISO interval LMP data and return records as a pandas DataFrame."""
 
     location = _validate_location(location)
     market_run_id = _normalize_market(market)
-    start, end = _date_window(date)
+    if not isinstance(days, int) or not 1 <= days <= 31:
+        raise ValueError("days must be an integer between 1 and 31")
+    start, end = _date_window(date, days=days)
     params = _build_oasis_params(location, market_run_id, start, end)
     response_content = _request_oasis(params)
     return _parse_oasis_zip(response_content)
@@ -55,7 +58,9 @@ def _normalize_market(market: str) -> str:
     return market_run_id
 
 
-def _date_window(date_value: Optional[str]) -> tuple[datetime, datetime]:
+def _date_window(
+    date_value: Optional[str], *, days: int = 1,
+) -> tuple[datetime, datetime]:
     if date_value:
         try:
             trade_date = date_type.fromisoformat(date_value)
@@ -65,7 +70,7 @@ def _date_window(date_value: Optional[str]) -> tuple[datetime, datetime]:
         trade_date = datetime.now(PACIFIC_TZ).date()
 
     start = datetime.combine(trade_date, time.min, tzinfo=PACIFIC_TZ)
-    end = start + timedelta(days=1)
+    end = start + timedelta(days=days)
     return start.astimezone(UTC_TZ), end.astimezone(UTC_TZ)
 
 
