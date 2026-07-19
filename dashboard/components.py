@@ -610,15 +610,30 @@ def install_console_theme(st, theme) -> None:
         [data-testid="stSegmentedControl"] button[aria-pressed="true"],
         [data-testid="stButtonGroup"] button[aria-pressed="true"],
         [data-baseweb="button-group"] button[aria-pressed="true"],
-        [data-testid="stSidebar"] [role="group"] button[aria-pressed="true"] {{
-            background: var(--accent) !important;
+        [data-testid="stSidebar"] [role="group"] button[aria-pressed="true"],
+        [data-testid="stSidebar"] [role="group"] button[aria-checked="true"],
+        [data-testid="stSidebar"] [role="group"] button[data-active="true"],
+        [data-testid="stSidebar"] [role="group"] button[data-selected="true"] {{
+            background: var(--bg-surface-secondary) !important;
             border-color: var(--accent) !important;
-            color: var(--accent-foreground) !important;
+            box-shadow: inset 0 0 0 1px var(--accent) !important;
+            color: var(--text-primary) !important;
         }}
         [data-testid="stSegmentedControl"] button[aria-pressed="true"] *,
         [data-testid="stButtonGroup"] button[aria-pressed="true"] *,
         [data-baseweb="button-group"] button[aria-pressed="true"] *,
-        [data-testid="stSidebar"] [role="group"] button[aria-pressed="true"] * {{
+        [data-testid="stSidebar"] [role="group"] button[aria-pressed="true"] *,
+        [data-testid="stSidebar"] [role="group"] button[aria-checked="true"] *,
+        [data-testid="stSidebar"] [role="group"] button[data-active="true"] *,
+        [data-testid="stSidebar"] [role="group"] button[data-selected="true"] * {{
+            color: var(--text-primary) !important;
+        }}
+        [data-testid="stSidebar"] [data-testid="stButton"] button,
+        [data-testid="stSidebar"] .stButton > button {{
+            color: var(--accent-foreground) !important;
+        }}
+        [data-testid="stSidebar"] [data-testid="stButton"] button *,
+        [data-testid="stSidebar"] .stButton > button * {{
             color: var(--accent-foreground) !important;
         }}
         [data-baseweb="popover"], [role="listbox"], [role="dialog"] {{

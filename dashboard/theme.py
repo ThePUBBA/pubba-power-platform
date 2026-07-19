@@ -76,7 +76,6 @@ def render_theme_selector(st, preference: str) -> None:
         PREFERENCES,
         default=preference.title(),
         selection_mode="single",
-        help="System follows your device appearance setting.",
         key="pubba_theme_selector",
     )
     chosen = normalize_preference(selected)
