@@ -251,16 +251,20 @@ def _market_section(st, data: dict, currency: str, zone: str) -> None:
         automargin=True,
         range=day_range,
     )
+    lower_price = min(values)
     upper_price = max(values)
+    lower_axis = min(0, floor(lower_price / 10) * 10)
     upper_axis = max(20, (floor(upper_price / 10) + 1) * 10)
     fig.update_yaxes(
-        range=[9, upper_axis + 1],
-        tick0=10,
+        range=[lower_axis, upper_axis],
+        tick0=0,
         dtick=10,
         tickprefix="$",
         tickformat=",.0f",
     )
-    fig.add_hline(y=10, line_color=GRID, line_width=1, layer="below")
+    fig.add_hline(y=lower_axis, line_color=GRID, line_width=1, layer="below")
+    if lower_axis < 0:
+        fig.add_hline(y=0, line_color=GRAY, line_width=1, layer="below")
     fig.add_hline(y=upper_axis, line_color=GRID, line_width=1, layer="below")
     fig.add_hline(y=current, line_dash="dot", line_color=GRAY)
     fig.add_annotation(
