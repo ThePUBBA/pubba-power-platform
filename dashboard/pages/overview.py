@@ -12,13 +12,11 @@ from dashboard.api_client import DashboardApiError
 from dashboard.auth import can
 from dashboard.charts import (
     CHART_CONFIG,
-    GRAY,
-    GRID,
     MINT,
-    WHITE,
     daily_energy_figure,
     daily_financial_figure,
     dispatch_economics_figure,
+    chart_palette,
     style_chart,
     telemetry_history_figure,
 )
@@ -46,6 +44,7 @@ from dashboard.formatting import (
     format_timestamp,
 )
 from dashboard.refresh import refresh_dashboard_data
+from dashboard.theme import THEMES
 
 
 def _tone(value: object) -> str:
@@ -197,6 +196,8 @@ def _cards(st, cards: list[dict]) -> None:
 
 
 def _market_section(st, data: dict, currency: str, zone: str) -> None:
+    theme = str(st.session_state.get("pubba_theme_mode") or "dark")
+    palette = chart_palette(theme)
     render_section_header(st, "Market Intelligence")
     raw_prices = (data.get("series") or {}).get("market_prices", [])
     prices = [
@@ -262,11 +263,11 @@ def _market_section(st, data: dict, currency: str, zone: str) -> None:
         tickprefix="$",
         tickformat=",.0f",
     )
-    fig.add_hline(y=lower_axis, line_color=GRID, line_width=1, layer="below")
+    fig.add_hline(y=lower_axis, line_color=palette["grid"], line_width=1, layer="below")
     if lower_axis < 0:
-        fig.add_hline(y=0, line_color=GRAY, line_width=1, layer="below")
-    fig.add_hline(y=upper_axis, line_color=GRID, line_width=1, layer="below")
-    fig.add_hline(y=current, line_dash="dot", line_color=GRAY)
+        fig.add_hline(y=0, line_color=palette["neutral"], line_width=1, layer="below")
+    fig.add_hline(y=upper_axis, line_color=palette["grid"], line_width=1, layer="below")
+    fig.add_hline(y=current, line_dash="dot", line_color=palette["neutral"])
     fig.add_annotation(
         x=latest_timestamp,
         y=current,
@@ -276,15 +277,15 @@ def _market_section(st, data: dict, currency: str, zone: str) -> None:
         yanchor="bottom",
         xshift=-12 if label_on_left else 12,
         yshift=10,
-        font={"color": WHITE, "size": 12},
-        bgcolor="#171717",
-        bordercolor="#2A2A2A",
+        font={"color": palette["primary"], "size": 12},
+        bgcolor=palette["surface"],
+        bordercolor=palette["grid"],
         borderpad=5,
     )
     fig = style_chart(
         fig, title="CAISO market price curve",
         subtitle=f"{metadata.get('market_name', 'CAISO')} · {metadata.get('market_type', 'RTM')} · {metadata.get('market_location')}",
-        y_title=f"{currency}/MWh", height=430,
+        y_title=f"{currency}/MWh", height=430, theme=theme,
     )
     fig.update_layout(hovermode="closest")
     st.plotly_chart(fig, width="stretch", config=CHART_CONFIG)
@@ -292,6 +293,7 @@ def _market_section(st, data: dict, currency: str, zone: str) -> None:
 
 
 def _performance_section(st, data: dict, currency: str, zone: str) -> None:
+    theme = str(st.session_state.get("pubba_theme_mode") or "dark")
     render_section_header(st, "Portfolio Performance")
     dispatches = (data.get("series") or {}).get("dispatches", [])
     daily = _daily_dispatch_metrics(dispatches, zone)
@@ -318,11 +320,11 @@ def _performance_section(st, data: dict, currency: str, zone: str) -> None:
         ("Average profit / dispatch", format_currency(total_profit / total_dispatches, currency)),
     ])
     financial = style_chart(
-        daily_financial_figure(daily),
+        daily_financial_figure(daily, theme=theme),
         title="Daily financial performance",
         subtitle="Gross revenue, charging cost, and retained profit from completed dispatch records.",
         y_title=f"{currency} ($)",
-        height=440,
+        height=440, theme=theme,
     )
     st.plotly_chart(financial, width="stretch", config=CHART_CONFIG)
     margin_text = (
@@ -335,11 +337,11 @@ def _performance_section(st, data: dict, currency: str, zone: str) -> None:
         f' · Best profit margin · {margin_text}'
     )
     energy = style_chart(
-        daily_energy_figure(daily),
+        daily_energy_figure(daily, theme=theme),
         title="Daily energy movement",
         subtitle="Charge and discharge energy by reporting date; energy ratio equals discharge divided by charge.",
         y_title="MWh",
-        height=420,
+        height=420, theme=theme,
     )
     st.plotly_chart(energy, width="stretch", config=CHART_CONFIG)
     st.caption(
@@ -349,6 +351,7 @@ def _performance_section(st, data: dict, currency: str, zone: str) -> None:
 
 
 def _dispatch_section(st, data: dict, currency: str, zone: str) -> None:
+    theme = str(st.session_state.get("pubba_theme_mode") or "dark")
     render_section_header(st, "Dispatch Economics")
     dispatches = (data.get("series") or {}).get("dispatches", [])
     if not dispatches:
@@ -358,11 +361,11 @@ def _dispatch_section(st, data: dict, currency: str, zone: str) -> None:
     if chart_rows:
         classifications = sorted({row["classification"] for row in chart_rows})
         dispatch_chart = style_chart(
-            dispatch_economics_figure(chart_rows),
+            dispatch_economics_figure(chart_rows, theme=theme),
             title="Dispatch economics",
             subtitle="Revenue, charging cost, and retained profit for each completed dispatch.",
             y_title=f"{currency} ($)",
-            height=460,
+            height=460, theme=theme,
         )
         st.plotly_chart(dispatch_chart, width="stretch", config=CHART_CONFIG)
         best = max(chart_rows, key=lambda row: row["profit"])
@@ -546,10 +549,14 @@ def _assets_section(st, payload: dict, currency: str, zone: str, client) -> None
             st.warning("Telemetry is stale; do not use it as a live dispatch instruction.")
         st.plotly_chart(
             style_chart(
-                telemetry_history_figure(history),
+                telemetry_history_figure(
+                    history,
+                    theme=str(st.session_state.get("pubba_theme_mode") or "dark"),
+                ),
                 title=f"{selected_asset} telemetry history",
                 subtitle="Observed state of charge and current power; gaps are not interpolated.",
                 height=390,
+                theme=str(st.session_state.get("pubba_theme_mode") or "dark"),
             ),
             width="stretch",
             config=CHART_CONFIG,
@@ -661,7 +668,10 @@ def _render_live(st, client, operator=None) -> None:
     with action:
         st.write("")
         st.button("Refresh", type="primary", width="stretch", help="Request fresh API, Supabase, and CAISO data now.")
-    render_refresh_countdown(st)
+    render_refresh_countdown(
+        st,
+        theme=THEMES.get(str(st.session_state.get("pubba_theme_mode") or "dark")),
+    )
     with st.spinner("Refreshing live operations data…"):
         payload, error = refresh_dashboard_data(st.session_state, client, timezone_name=timezone_name or None)
     if error:

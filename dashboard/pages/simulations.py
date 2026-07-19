@@ -5,7 +5,7 @@ from datetime import date, datetime
 import plotly.graph_objects as go
 
 from dashboard.api_client import DashboardApiError, Only1ApiClient
-from dashboard.charts import CHART_CONFIG, GRAY, MINT, style_chart
+from dashboard.charts import CHART_CONFIG, MINT, chart_palette, style_chart
 from dashboard.components import (
     render_notice,
     render_page_header,
@@ -16,6 +16,8 @@ from dashboard.formatting import as_decimal, format_currency, format_energy, for
 
 
 def render(st, client: Only1ApiClient) -> None:
+    theme = str(st.session_state.get("pubba_theme_mode") or "dark")
+    palette = chart_palette(theme)
     prepared = st.session_state.get("recommendation_simulation_inputs") or {}
     prepared_date = date.today()
     if prepared.get("market_timestamp"):
@@ -114,7 +116,7 @@ def render(st, client: Only1ApiClient) -> None:
         fig = go.Figure()
         if charge_points:
             charge_times = [format_timestamp(p["timestamp"], "America/Los_Angeles") for p in charge_points]
-            fig.add_trace(go.Scatter(x=[p["timestamp"] for p in charge_points], y=[p["price"] for p in charge_points], customdata=charge_times, name="Charge window", line={"color": GRAY, "width": 3}, hovertemplate="%{customdata}<br>$%{y:,.2f}/MWh<extra></extra>"))
+            fig.add_trace(go.Scatter(x=[p["timestamp"] for p in charge_points], y=[p["price"] for p in charge_points], customdata=charge_times, name="Charge window", line={"color": palette["neutral"], "width": 3}, hovertemplate="%{customdata}<br>$%{y:,.2f}/MWh<extra></extra>"))
         if discharge_points:
             discharge_times = [format_timestamp(p["timestamp"], "America/Los_Angeles") for p in discharge_points]
             fig.add_trace(go.Scatter(x=[p["timestamp"] for p in discharge_points], y=[p["price"] for p in discharge_points], customdata=discharge_times, name="Discharge window", line={"color": MINT, "width": 3}, hovertemplate="%{customdata}<br>$%{y:,.2f}/MWh<extra></extra>"))
@@ -125,6 +127,7 @@ def render(st, client: Only1ApiClient) -> None:
                 title="Historical charge and discharge windows",
                 subtitle=f"{market} · {location} · {simulation_date.isoformat()}",
                 y_title="USD/MWh",
+                theme=theme,
             ),
             width="stretch",
             config=CHART_CONFIG,

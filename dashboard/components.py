@@ -3,7 +3,7 @@
 from html import escape
 
 
-def install_console_theme(st) -> None:
+def install_console_theme(st, theme) -> None:
     st.markdown(
         """
         <style>
@@ -516,6 +516,75 @@ def install_console_theme(st) -> None:
         """,
         unsafe_allow_html=True,
     )
+    st.markdown(
+        f"""
+        <style>
+        :root {{
+            color-scheme: {theme.mode};
+            --bg-page: {theme.bg_page};
+            --bg-sidebar: {theme.bg_sidebar};
+            --bg-surface: {theme.bg_surface};
+            --bg-surface-secondary: {theme.bg_surface_secondary};
+            --text-primary: {theme.text_primary};
+            --text-secondary: {theme.text_secondary};
+            --text-muted: {theme.text_muted};
+            --border-default: {theme.border_default};
+            --border-strong: {theme.border_strong};
+            --accent: #44FFBB;
+            --accent-foreground: #000000;
+            --button-primary: #44FFBB;
+            --button-primary-hover: #44FFBB;
+            --input-bg: {theme.input_bg};
+            --focus-ring: #44FFBB;
+            --pubba-bg: var(--bg-page);
+            --pubba-surface: var(--bg-surface-secondary);
+            --pubba-card: var(--bg-surface);
+            --pubba-text: var(--text-primary);
+            --pubba-muted: var(--text-muted);
+            --pubba-elevated: var(--bg-surface-secondary);
+            --pubba-border: var(--border-default);
+        }}
+        [data-testid="stHeader"] {{
+            background: color-mix(in srgb, var(--bg-page) 92%, transparent);
+            border-bottom-color: var(--border-default);
+        }}
+        [data-testid="stSidebar"] {{ background: var(--bg-sidebar); }}
+        [data-testid="stSidebar"] [role="radiogroup"] label:hover {{
+            background: {theme.hover_bg};
+        }}
+        .pubba-kpi {{ box-shadow: 0 12px 32px {theme.shadow}; }}
+        .pubba-kpi:hover {{ border-color: var(--border-strong); }}
+        .pubba-neutral {{ border-top-color: var(--border-strong); }}
+        .pubba-soc-track {{ background: var(--bg-surface-secondary); }}
+        [data-baseweb="input"] > div,
+        [data-baseweb="select"] > div,
+        [data-testid="stDateInput"] [data-baseweb="input"] > div {{
+            background: var(--input-bg) !important;
+        }}
+        [data-baseweb="popover"], [role="listbox"], [role="dialog"] {{
+            background: var(--bg-surface) !important;
+            color: var(--text-primary) !important;
+            border-color: var(--border-default) !important;
+        }}
+        [data-testid="stDataFrame"], [data-testid="stTable"],
+        [data-testid="stPlotlyChart"], [data-testid="stExpander"] {{
+            background: var(--bg-surface);
+            color: var(--text-primary);
+        }}
+        ::-webkit-scrollbar-thumb {{ background: var(--border-strong); }}
+        a, button, input, textarea, select, [tabindex]:not([tabindex="-1"]) {{
+            accent-color: var(--accent);
+        }}
+        a:focus-visible, button:focus-visible, input:focus-visible,
+        textarea:focus-visible, select:focus-visible,
+        [tabindex]:not([tabindex="-1"]):focus-visible {{
+            outline: 2px solid var(--focus-ring) !important;
+            outline-offset: 2px !important;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def render_sidebar_brand(st) -> None:
@@ -648,7 +717,7 @@ def render_notice(st, message: str) -> None:
     )
 
 
-def render_refresh_countdown(st, seconds: int = 60) -> None:
+def render_refresh_countdown(st, seconds: int = 60, *, theme=None) -> None:
     safe_seconds = max(1, int(seconds))
     st.iframe(
         f"""
@@ -661,7 +730,7 @@ def render_refresh_countdown(st, seconds: int = 60) -> None:
                 padding: 0;
                 overflow: hidden;
                 background: transparent;
-                color: #A7A7A7;
+                color: {getattr(theme, 'text_muted', '#A7A7A7')};
                 font-family: Inter, Arial, Helvetica, sans-serif;
                 font-size: 12px;
               }}

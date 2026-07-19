@@ -13,6 +13,7 @@ from dashboard.components import (
 from dashboard.pages import operators, overview, recommendation_history, simulations
 from dashboard.formatting import format_timestamp
 from dashboard.refresh import STATE_KEY
+from dashboard.theme import render_theme_selector, resolved_theme, theme_preference
 
 
 def main() -> None:
@@ -22,7 +23,10 @@ def main() -> None:
         layout="wide",
         initial_sidebar_state="expanded",
     )
-    install_console_theme(st)
+    preference = theme_preference(st)
+    theme = resolved_theme(st, preference)
+    st.session_state["pubba_theme_mode"] = theme.mode
+    install_console_theme(st, theme)
     render_sidebar_brand(st)
     st.sidebar.markdown('<span class="pubba-environment">Production</span>', unsafe_allow_html=True)
     try:
@@ -32,6 +36,7 @@ def main() -> None:
         render_error_state(st, str(exc))
         return
     operator = configure_operator_identity(st, client)
+    render_theme_selector(st, preference)
     if operator:
         try:
             portfolios = client.get_authorized_portfolios()

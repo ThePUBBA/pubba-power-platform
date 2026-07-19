@@ -1,9 +1,30 @@
 [theme]
 primaryColor = "#44FFBB"
-backgroundColor = "#000000"
-secondaryBackgroundColor = "#0F0F0F"
-textColor = "#FFFFFF"
 base = "dark"
+
+[theme.dark]
+backgroundColor = "#080A09"
+secondaryBackgroundColor = "#171817"
+textColor = "#FFFFFF"
+borderColor = "#303331"
+
+[theme.dark.sidebar]
+backgroundColor = "#080808"
+secondaryBackgroundColor = "#111311"
+textColor = "#FFFFFF"
+borderColor = "#303331"
+
+[theme.light]
+backgroundColor = "#F4F6F5"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#111312"
+borderColor = "#D8DDDA"
+
+[theme.light.sidebar]
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#ECEFEE"
+textColor = "#111312"
+borderColor = "#D8DDDA"
 
 [client]
 toolbarMode = "minimal"

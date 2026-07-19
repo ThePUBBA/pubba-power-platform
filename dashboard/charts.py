@@ -7,13 +7,25 @@ import os
 
 import plotly.graph_objects as go
 
+from dashboard.theme import THEMES
+
 
 MINT = "#44FFBB"
-WHITE = "#FFFFFF"
-MUTED = "#A7A7A7"
-GRID = "#2F2F2F"
 GRAY = "#737373"
 CHART_CONFIG = {"displayModeBar": False, "responsive": True}
+
+
+def chart_palette(theme: str = "dark") -> dict[str, str]:
+    tokens = THEMES.get(theme, THEMES["dark"])
+    return {
+        "accent": MINT,
+        "primary": tokens.text_primary,
+        "secondary": tokens.text_secondary,
+        "muted": tokens.text_muted,
+        "grid": tokens.border_default,
+        "neutral": "#737A76" if theme == "light" else GRAY,
+        "surface": tokens.bg_surface,
+    }
 
 
 def _telemetry_gap_rows(rows: list[dict]) -> list[dict]:
@@ -52,9 +64,11 @@ def style_chart(
     subtitle: str = "",
     y_title: str = "",
     height: int = 370,
+    theme: str = "dark",
 ) -> go.Figure:
+    palette = chart_palette(theme)
     title_text = title + (
-        f"<br><sup style='color:{MUTED};font-family:Inter,Arial,sans-serif'>"
+        f"<br><sup style='color:{palette['muted']};font-family:Inter,Arial,sans-serif'>"
         f"{subtitle}</sup>" if subtitle else ""
     )
     fig.update_layout(
@@ -62,30 +76,30 @@ def style_chart(
             "text": title_text,
             "font": {
                 "size": 18,
-                "color": WHITE,
+                "color": palette["primary"],
                 "family": "Bebas Neue, Arial Narrow, Arial, sans-serif",
             },
         },
         height=height,
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        font={"color": WHITE, "family": "Inter, Arial, sans-serif", "size": 12},
+        font={"color": palette["primary"], "family": "Inter, Arial, sans-serif", "size": 12},
         margin={"l": 64, "r": 52, "t": 82, "b": 68},
         hovermode="closest",
-        hoverlabel={"bgcolor": "#1C1C1C", "bordercolor": GRID, "font_color": WHITE},
+        hoverlabel={"bgcolor": palette["surface"], "bordercolor": palette["grid"], "font_color": palette["primary"]},
         legend={"orientation": "h", "y": 1.12, "x": 1, "xanchor": "right"},
     )
     fig.update_xaxes(
-        gridcolor=GRID,
+        gridcolor=palette["grid"],
         zeroline=False,
-        tickfont={"color": MUTED},
+        tickfont={"color": palette["muted"]},
         automargin=True,
     )
     fig.update_yaxes(
-        gridcolor=GRID,
+        gridcolor=palette["grid"],
         zeroline=False,
         title=y_title,
-        tickfont={"color": MUTED},
+        tickfont={"color": palette["muted"]},
         automargin=True,
         exponentformat="none",
         showexponent="none",
@@ -93,7 +107,7 @@ def style_chart(
     return fig
 
 
-def daily_financial_figure(rows: list[dict]) -> go.Figure:
+def daily_financial_figure(rows: list[dict], *, theme: str = "dark") -> go.Figure:
     """Compare actual daily revenue, charging cost, and retained profit."""
     dates = [row["label"] for row in rows]
     custom = [
@@ -101,10 +115,11 @@ def daily_financial_figure(rows: list[dict]) -> go.Figure:
         for row in rows
     ]
     fig = go.Figure()
+    palette = chart_palette(theme)
     for field, name, color in (
         ("revenue", "Gross revenue", MINT),
-        ("charging_cost", "Charging cost", GRAY),
-        ("profit", "Net profit", WHITE),
+        ("charging_cost", "Charging cost", palette["neutral"]),
+        ("profit", "Net profit", palette["primary"]),
     ):
         fig.add_bar(
             x=dates,
@@ -130,7 +145,7 @@ def daily_financial_figure(rows: list[dict]) -> go.Figure:
     return fig
 
 
-def daily_energy_figure(rows: list[dict]) -> go.Figure:
+def daily_energy_figure(rows: list[dict], *, theme: str = "dark") -> go.Figure:
     """Compare charged and discharged energy using returned dispatch values."""
     dates = [row["label"] for row in rows]
     custom = [
@@ -142,8 +157,9 @@ def daily_energy_figure(rows: list[dict]) -> go.Figure:
         for row in rows
     ]
     fig = go.Figure()
+    palette = chart_palette(theme)
     for field, name, color in (
-        ("charge_energy_mwh", "Charge energy", GRAY),
+        ("charge_energy_mwh", "Charge energy", palette["neutral"]),
         ("discharge_energy_mwh", "Discharge energy", MINT),
     ):
         fig.add_bar(
@@ -169,7 +185,7 @@ def daily_energy_figure(rows: list[dict]) -> go.Figure:
     return fig
 
 
-def dispatch_economics_figure(rows: list[dict]) -> go.Figure:
+def dispatch_economics_figure(rows: list[dict], *, theme: str = "dark") -> go.Figure:
     """Compare revenue, charging cost, and profit for each returned dispatch."""
     labels = [row["label"] for row in rows]
     custom = [
@@ -190,10 +206,11 @@ def dispatch_economics_figure(rows: list[dict]) -> go.Figure:
     ]
     patterns = ["/" if row["classification_key"] != "operational" else "" for row in rows]
     fig = go.Figure()
+    palette = chart_palette(theme)
     for field, name, color in (
         ("revenue", "Revenue", MINT),
-        ("charging_cost", "Charging cost", GRAY),
-        ("profit", "Profit", WHITE),
+        ("charging_cost", "Charging cost", palette["neutral"]),
+        ("profit", "Profit", palette["primary"]),
     ):
         fig.add_bar(
             x=labels,
@@ -243,12 +260,13 @@ def trend_figure(rows: list[dict], field: str, *, name: str, color: str, currenc
     return fig
 
 
-def telemetry_history_figure(rows: list[dict]) -> go.Figure:
+def telemetry_history_figure(rows: list[dict], *, theme: str = "dark") -> go.Figure:
     """Plot observed SOC and current power without interpolating large gaps."""
     ordered = _telemetry_gap_rows(
         sorted(rows, key=lambda row: str(row.get("recorded_at") or ""))
     )
     fig = go.Figure()
+    palette = chart_palette(theme)
     soc_rows = [row for row in ordered if row.get("state_of_charge_pct") is not None or row.get("_gap_break")]
     power_rows = [row for row in ordered if row.get("current_power_mw") is not None or row.get("_gap_break")]
     if soc_rows:
@@ -267,13 +285,13 @@ def telemetry_history_figure(rows: list[dict]) -> go.Figure:
             y=[row.get("current_power_mw") for row in power_rows],
             name="Current power", yaxis="y2", connectgaps=False,
             mode="markers" if len(power_rows) == 1 else "lines+markers",
-            line={"color": WHITE, "width": 2}, marker={"color": WHITE, "size": 7},
+            line={"color": palette["primary"], "width": 2}, marker={"color": palette["primary"], "size": 7},
             customdata=[["" if row.get("_gap_break") else "Simulated" if row.get("is_simulated") else "Operational"] for row in power_rows],
             hovertemplate="%{x|%b %d, %Y · %I:%M %p}<br>%{y:.2f} MW<br>%{customdata[0]}<extra></extra>",
         )
     for field, name, color, dash in (
-        ("available_charge_power_mw", "Charge availability", GRAY, "dot"),
-        ("available_discharge_power_mw", "Discharge availability", "#C7C7C7", "dash"),
+        ("available_charge_power_mw", "Charge availability", palette["neutral"], "dot"),
+        ("available_discharge_power_mw", "Discharge availability", palette["secondary"], "dash"),
     ):
         available = [row for row in ordered if row.get(field) is not None or row.get("_gap_break")]
         if available:
