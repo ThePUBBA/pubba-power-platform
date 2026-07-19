@@ -116,6 +116,63 @@ def test_admin_has_explicit_global_portfolio_behavior(monkeypatch):
     assert response.status_code == 200
 
 
+def test_single_active_assignment_becomes_default_read_portfolio(monkeypatch):
+    configure_auth(monkeypatch, role="viewer")
+    monkeypatch.setenv("OPERATOR_PORTFOLIO_RBAC_ENABLED", "true")
+    monkeypatch.setattr(main, "list_operator_portfolios", lambda operator_id: [
+        {"portfolio_id": PORTFOLIO_ID, "active": True}
+    ])
+    captured = {}
+    monkeypatch.setattr(
+        main,
+        "list_recommendation_history",
+        lambda **kwargs: captured.update(kwargs) or [],
+    )
+
+    response = TestClient(main.app).get(
+        "/recommendations/history", headers=AUTH_HEADERS
+    )
+
+    assert response.status_code == 200
+    assert captured["portfolio_id"] == PORTFOLIO_ID
+
+
+def test_admin_lists_multiple_portfolios_with_global_access(monkeypatch):
+    configure_auth(monkeypatch, role="admin")
+    monkeypatch.setattr(main, "list_portfolios", lambda: [
+        {"id": PORTFOLIO_ID, "code": "ONLY1"},
+        {"id": OTHER_PORTFOLIO, "code": "ACCEPTANCE"},
+    ])
+
+    response = TestClient(main.app).get(
+        "/operators/me/portfolios", headers=AUTH_HEADERS
+    )
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()] == [PORTFOLIO_ID, OTHER_PORTFOLIO]
+    assert {item["access_role"] for item in response.json()} == {"admin"}
+
+
+def test_portfolio_role_override_can_reduce_global_permissions(monkeypatch):
+    configure_workflow_storage(monkeypatch, role="approver")
+    monkeypatch.setenv("OPERATOR_PORTFOLIO_RBAC_ENABLED", "true")
+    monkeypatch.setattr(main, "get_operator_portfolio_access", lambda *args: {
+        "portfolio_id": PORTFOLIO_ID,
+        "operator_id": OPERATOR_ID,
+        "role_override": "viewer",
+        "active": True,
+    })
+
+    response = TestClient(main.app).post(
+        f"/recommendations/history/{RECOMMENDATION_ID}/approval",
+        json={"approval_status": "approved", "note": "should be denied"},
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error_code"] == "operator_forbidden"
+
+
 @pytest.mark.parametrize(
     ("role", "path"),
     [
@@ -162,6 +219,41 @@ def test_transactional_rpc_failure_does_not_fall_back_to_business_write(monkeypa
     )
     assert response.status_code == 502
     assert persisted.get("acknowledged_at") is None
+
+
+def test_transactional_audit_flag_uses_atomic_rpc_without_legacy_writes(monkeypatch):
+    configure_workflow_storage(monkeypatch, role="operator")
+    monkeypatch.setenv("OPERATOR_TRANSACTIONAL_AUDIT_ENABLED", "true")
+    captured = {}
+    monkeypatch.setattr(
+        main,
+        "transactional_operator_action",
+        lambda function_name, arguments: captured.update({
+            "function_name": function_name,
+            "arguments": arguments,
+        }) or {"recommendation": {}},
+    )
+    monkeypatch.setattr(
+        main,
+        "update_recommendation_links",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("legacy write path used")
+        ),
+    )
+
+    response = TestClient(main.app).post(
+        f"/recommendations/history/{RECOMMENDATION_ID}/acknowledge",
+        json={"note": "reviewed"}, headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    assert captured["function_name"] == "pubba_audited_recommendation_action"
+    assert captured["arguments"] == {
+        "p_operator_id": OPERATOR_ID,
+        "p_recommendation_id": RECOMMENDATION_ID,
+        "p_action": "acknowledge",
+        "p_payload": {"note": "reviewed"},
+    }
 
 
 def test_transactional_failure_logging_excludes_arguments(monkeypatch, caplog):

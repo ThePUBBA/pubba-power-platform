@@ -5,7 +5,13 @@ from fastapi.testclient import TestClient
 
 import main
 from dashboard.auth import can
-from services.operator_auth import OperatorAuthError, OperatorPrincipal, principal_from_record, verify_oidc_token
+from services.operator_auth import (
+    ROLE_PERMISSIONS,
+    OperatorAuthError,
+    OperatorPrincipal,
+    principal_from_record,
+    verify_oidc_token,
+)
 from services.recommendation_history import decision_timeline
 
 
@@ -78,6 +84,44 @@ def test_unauthenticated_operator_access_is_401(monkeypatch):
     assert response.status_code == 401
 
 
+def test_valid_active_operator_resolves_from_verified_subject(monkeypatch):
+    configure_auth(monkeypatch, role="operator")
+
+    response = TestClient(main.app).get("/operators/me", headers=AUTH_HEADERS)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "id": OPERATOR_ID,
+        "email": "jane@pubba.test",
+        "display_name": "Jane Operator",
+        "role": "operator",
+        "status": "active",
+    }
+
+
+def test_unknown_operator_is_not_provisioned(monkeypatch):
+    configure_auth(monkeypatch)
+    monkeypatch.setattr(main, "get_operator_by_subject", lambda subject: None)
+
+    response = TestClient(main.app).get("/operators/me", headers=AUTH_HEADERS)
+
+    assert response.status_code == 403
+    assert response.json()["error_code"] == "operator_not_provisioned"
+
+
+def test_invalid_operator_credential_is_rejected(monkeypatch):
+    monkeypatch.setattr(
+        main,
+        "verify_oidc_token",
+        lambda token: (_ for _ in ()).throw(OperatorAuthError("invalid credential")),
+    )
+
+    response = TestClient(main.app).get("/operators/me", headers=AUTH_HEADERS)
+
+    assert response.status_code == 401
+    assert response.json()["error_code"] == "invalid_operator_credential"
+
+
 def test_viewer_can_read_history_but_cannot_write(monkeypatch):
     configure_auth(monkeypatch, role="viewer")
     monkeypatch.setattr(main, "list_recommendation_history", lambda **kwargs: [])
@@ -86,6 +130,23 @@ def test_viewer_can_read_history_but_cannot_write(monkeypatch):
     denied = client.post("/recommendations/BAT-1/capture", headers=AUTH_HEADERS)
     assert denied.status_code == 403
     assert denied.json()["error_code"] == "operator_forbidden"
+
+
+def test_recommendation_write_flags_fail_closed(monkeypatch):
+    configure_auth(monkeypatch, role="operator")
+    client = TestClient(main.app)
+
+    monkeypatch.setenv("RECOMMENDATION_WRITES_ENABLED", "false")
+    monkeypatch.setenv("OPERATOR_RBAC_STORAGE_ENABLED", "true")
+    disabled = client.post("/recommendations/BAT-1/capture", headers=AUTH_HEADERS)
+    assert disabled.status_code == 403
+    assert disabled.json()["error_code"] == "recommendation_writes_disabled"
+
+    monkeypatch.setenv("RECOMMENDATION_WRITES_ENABLED", "true")
+    monkeypatch.setenv("OPERATOR_RBAC_STORAGE_ENABLED", "false")
+    no_storage = client.post("/recommendations/BAT-1/capture", headers=AUTH_HEADERS)
+    assert no_storage.status_code == 503
+    assert no_storage.json()["error_code"] == "operator_audit_storage_disabled"
 
 
 def test_operator_cannot_link_dispatch_even_with_spoofed_role_header(monkeypatch):
@@ -195,6 +256,35 @@ def test_role_aware_dashboard_permissions_are_conservative():
     assert can({"role": "operator", "status": "active"}, "operator") is True
     assert can({"role": "approver", "status": "active"}, "approver", "admin") is True
     assert can({"role": "admin", "status": "inactive"}, "admin") is False
+
+
+def test_backend_role_permission_matrix_is_exact():
+    assert ROLE_PERMISSIONS == {
+        "viewer": frozenset({"recommendations:read"}),
+        "operator": frozenset({
+            "recommendations:read",
+            "recommendations:capture",
+            "recommendations:acknowledge",
+            "recommendations:link_simulation",
+        }),
+        "approver": frozenset({
+            "recommendations:read",
+            "recommendations:capture",
+            "recommendations:acknowledge",
+            "recommendations:link_simulation",
+            "recommendations:approve",
+            "recommendations:link_dispatch",
+        }),
+        "admin": frozenset({
+            "recommendations:read",
+            "recommendations:capture",
+            "recommendations:acknowledge",
+            "recommendations:link_simulation",
+            "recommendations:approve",
+            "recommendations:link_dispatch",
+            "operators:manage",
+        }),
+    }
 
 
 def test_principal_public_shape_does_not_expose_internal_identity():
