@@ -33,6 +33,13 @@ def test_theme_preference_normalization_supports_three_visible_choices():
     assert normalize_preference("unsupported") == "system"
 
 
+def test_theme_selector_updates_streamlits_native_persisted_theme():
+    source = Path("dashboard/theme.py").read_text()
+
+    assert "stActiveTheme-${{window.parent.location.pathname}}-v2" in source
+    assert "window.parent.location.reload()" in source
+
+
 def test_light_chart_palette_has_readable_text_grid_and_tooltip_surface():
     palette = chart_palette("light")
     figure = style_chart(go.Figure(), title="Market", theme="light")

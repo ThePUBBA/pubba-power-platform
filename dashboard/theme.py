@@ -100,6 +100,16 @@ def render_theme_selector(st, preference: str) -> None:
               return;
             }}
             window.parent.localStorage.setItem(key, current);
+            const nativeKey = `stActiveTheme-${{window.parent.location.pathname}}-v2`;
+            const nativeValue = current.charAt(0).toUpperCase() + current.slice(1);
+            let savedNative = null;
+            try {{
+              savedNative = JSON.parse(window.parent.localStorage.getItem(nativeKey));
+            }} catch (_) {{ /* Replace malformed theme state below. */ }}
+            if (savedNative !== nativeValue) {{
+              window.parent.localStorage.setItem(nativeKey, JSON.stringify(nativeValue));
+              window.parent.location.reload();
+            }}
           }} catch (_) {{ /* URL/session persistence remains available. */ }}
         }})();
         </script></body></html>
