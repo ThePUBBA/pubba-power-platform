@@ -104,6 +104,6 @@ def render_theme_selector(st, preference: str) -> None:
         }})();
         </script></body></html>
         """,
-        height=0,
+        height=1,
         tab_index=-1,
     )
