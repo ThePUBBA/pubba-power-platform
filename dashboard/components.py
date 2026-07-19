@@ -585,7 +585,11 @@ def install_console_theme(st, theme) -> None:
         [data-testid="stSidebar"] [role="radiogroup"] label p {{
             color: var(--text-primary) !important;
         }}
-        [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked),
+        [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {{
+            color: var(--accent) !important;
+            border-color: var(--accent) !important;
+            box-shadow: inset 0 0 0 1px var(--accent) !important;
+        }}
         [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) p {{
             color: var(--accent) !important;
         }}
