@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import os
 from decimal import Decimal, InvalidOperation
 from typing import Callable
@@ -127,9 +127,10 @@ def _market_snapshot(
     *,
     location: str,
     market_loader: Callable[..., object],
+    trade_date: str,
 ) -> dict:
-    try:
-        frame = market_loader(location=location, market="RTM", date=None)
+    def load_points(date: str) -> list[dict]:
+        frame = market_loader(location=location, market="RTM", date=date)
         records = frame.to_dict(orient="records")
         points = [
             {"timestamp": row.get("timestamp"), "price_per_mwh": row.get("lmp_prc")}
@@ -137,14 +138,26 @@ def _market_snapshot(
             if row.get("timestamp") and row.get("lmp_prc") is not None
         ]
         points.sort(key=lambda point: str(point["timestamp"]))
+        return points
+
+    try:
+        points = load_points(trade_date)
         if not points:
             raise CaisoOasisError("CAISO OASIS returned no usable price points")
+        previous_date = (
+            datetime.fromisoformat(trade_date).date() - timedelta(days=1)
+        ).isoformat()
+        try:
+            previous_points = load_points(previous_date)
+        except (CaisoOasisError, ValueError, AttributeError, TypeError):
+            previous_points = []
         return {
             "status": "connected",
             "location": location,
             "market": "RTM",
             "current_price_per_mwh": points[-1]["price_per_mwh"],
             "price_points": points,
+            "previous_price_points": previous_points,
             "updated_at": points[-1]["timestamp"],
         }
     except (CaisoOasisError, ValueError, AttributeError, TypeError):
@@ -154,6 +167,7 @@ def _market_snapshot(
             "market": "RTM",
             "current_price_per_mwh": None,
             "price_points": [],
+            "previous_price_points": [],
             "updated_at": None,
         }
 
@@ -253,9 +267,15 @@ def build_dashboard_summary(
         (str(row["location"]) for row in reversed(completed) if row.get("location")),
         DEFAULT_CAISO_NODE,
     )
-    market = _market_snapshot(location=location, market_loader=market_loader) if include_market else {
+    market_trade_date = generated_at.astimezone(ZoneInfo("America/Los_Angeles")).date().isoformat()
+    market = _market_snapshot(
+        location=location,
+        market_loader=market_loader,
+        trade_date=market_trade_date,
+    ) if include_market else {
         "status": "not_checked", "location": location, "market": "RTM",
-        "current_price_per_mwh": None, "price_points": [], "updated_at": None,
+        "current_price_per_mwh": None, "price_points": [],
+        "previous_price_points": [], "updated_at": None,
     }
     try:
         telemetry = _telemetry_snapshot(telemetry_loader(), now=generated_at)
@@ -293,6 +313,7 @@ def build_dashboard_summary(
             "daily": _daily_series(completed, zone),
             "dispatches": _dispatch_series(completed),
             "market_prices": market["price_points"],
+            "previous_market_prices": market["previous_price_points"],
             "state_of_charge": [
                 {
                     "asset_id": item["asset_id"],

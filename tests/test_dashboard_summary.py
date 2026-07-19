@@ -81,9 +81,16 @@ def test_previous_local_day_is_not_in_today_kpis_but_remains_in_history():
 
 
 def test_market_snapshot_is_live_when_present_and_honestly_unavailable_otherwise():
-    live = build([dispatch()], market_loader=lambda **kwargs: pd.DataFrame([{
-        "timestamp": "2026-07-15T11:55:00-0700", "lmp_prc": 42.5,
-    }]))
+    requested_dates = []
+
+    def market_loader(**kwargs):
+        requested_dates.append(kwargs["date"])
+        price = 42.5 if kwargs["date"] == "2026-07-15" else 35.0
+        return pd.DataFrame([{
+            "timestamp": f"{kwargs['date']}T11:55:00-0700", "lmp_prc": price,
+        }])
+
+    live = build([dispatch()], market_loader=market_loader)
     unavailable = build([dispatch()])
 
     assert live["status"]["market_data"] == "connected"
@@ -96,5 +103,10 @@ def test_market_snapshot_is_live_when_present_and_honestly_unavailable_otherwise
     }
     assert live["series"]["dispatches"][0]["charging_cost"] == 1000
     assert live["series"]["dispatches"][0]["market"] is None
+    assert requested_dates == ["2026-07-15", "2026-07-14"]
+    assert live["series"]["previous_market_prices"] == [{
+        "timestamp": "2026-07-14T11:55:00-0700", "price_per_mwh": 35.0,
+    }]
     assert unavailable["status"]["market_data"] == "unavailable"
     assert unavailable["series"]["market_prices"] == []
+    assert unavailable["series"]["previous_market_prices"] == []

@@ -83,6 +83,29 @@ def _parsed_timestamp(value: object) -> datetime | None:
         return None
 
 
+def _align_market_comparison(
+    points: list[dict], *, comparison_date, zone: str,
+) -> list[dict]:
+    """Align another trade day's intervals to the current day's clock times."""
+    aligned = []
+    local_zone = ZoneInfo(zone)
+    for point in points:
+        stamp = _parsed_timestamp(point.get("timestamp")) if isinstance(point, dict) else None
+        price = _numeric(point.get("price_per_mwh")) if isinstance(point, dict) else None
+        if stamp is None or price is None:
+            continue
+        local = stamp.astimezone(local_zone)
+        comparison_stamp = datetime.combine(
+            comparison_date, local.time().replace(tzinfo=None), tzinfo=local_zone,
+        )
+        aligned.append({
+            "timestamp": comparison_stamp.isoformat(),
+            "price_per_mwh": price,
+            "source_timestamp": point.get("timestamp"),
+        })
+    return sorted(aligned, key=lambda point: point["timestamp"])
+
+
 def _margin(profit: float, revenue: float) -> float | None:
     return profit / revenue if revenue else None
 
@@ -205,6 +228,7 @@ def _market_section(st, data: dict, currency: str, zone: str) -> None:
     palette = chart_palette(theme)
     render_section_header(st, "Market Intelligence")
     raw_prices = (data.get("series") or {}).get("market_prices", [])
+    raw_previous_prices = (data.get("series") or {}).get("previous_market_prices", [])
     prices = [
         {"timestamp": point.get("timestamp"), "price_per_mwh": _numeric(point.get("price_per_mwh"))}
         for point in raw_prices
@@ -239,11 +263,32 @@ def _market_section(st, data: dict, currency: str, zone: str) -> None:
     latest_local = datetime.fromisoformat(
         str(latest_timestamp).replace("Z", "+00:00")
     ).astimezone(ZoneInfo(zone))
+    previous_prices = _align_market_comparison(
+        raw_previous_prices,
+        comparison_date=latest_local.date(),
+        zone=zone,
+    )
     label_on_left = latest_local.hour >= 21
-    fig = go.Figure(go.Scatter(
+    fig = go.Figure()
+    if previous_prices:
+        previous_source_date = _parsed_timestamp(
+            previous_prices[0]["source_timestamp"]
+        ).astimezone(ZoneInfo(zone))
+        fig.add_trace(go.Scatter(
+            x=[point["timestamp"] for point in previous_prices],
+            y=[point["price_per_mwh"] for point in previous_prices],
+            customdata=[
+                format_timestamp(point["source_timestamp"], zone)
+                for point in previous_prices
+            ],
+            line={"color": palette["neutral"], "width": 2, "dash": "dash"},
+            name=f"Previous day · {previous_source_date.strftime('%b %-d')}",
+            hovertemplate="Previous day<br>%{customdata}<br>$%{y:,.2f}/MWh<extra></extra>",
+        ))
+    fig.add_trace(go.Scatter(
         x=[point["timestamp"] for point in prices], y=values,
         customdata=market_times,
-        line={"color": MINT, "width": 3}, name="CAISO RTM LMP",
+        line={"color": MINT, "width": 3}, name="Today",
         hovertemplate="%{customdata}<br>$%{y:,.2f}/MWh<extra></extra>",
     ))
     current = values[-1]
@@ -257,8 +302,10 @@ def _market_section(st, data: dict, currency: str, zone: str) -> None:
         automargin=True,
         range=day_range,
     )
-    lower_price = min(values)
-    upper_price = max(values)
+    comparison_values = [point["price_per_mwh"] for point in previous_prices]
+    visible_values = values + comparison_values
+    lower_price = min(visible_values)
+    upper_price = max(visible_values)
     lower_axis = min(0, floor(lower_price / 10) * 10)
     upper_axis = max(20, (floor(upper_price / 10) + 1) * 10)
     fig.update_yaxes(
@@ -292,7 +339,7 @@ def _market_section(st, data: dict, currency: str, zone: str) -> None:
         subtitle=f"{metadata.get('market_name', 'CAISO')} · {metadata.get('market_type', 'RTM')} · {metadata.get('market_location')}",
         y_title=f"{currency}/MWh", height=430, theme=theme,
     )
-    fig.update_layout(hovermode="closest")
+    fig.update_layout(hovermode="closest", showlegend=bool(previous_prices))
     st.plotly_chart(fig, width="stretch", config=CHART_CONFIG)
     st.caption(f"Latest interval {format_timestamp(metadata.get('market_updated_at'), zone)}")
 

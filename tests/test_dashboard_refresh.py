@@ -1,3 +1,5 @@
+from datetime import date
+
 from dashboard.api_client import DashboardApiError
 from dashboard.charts import (
     daily_energy_figure,
@@ -8,6 +10,7 @@ from dashboard.charts import (
     trend_figure,
 )
 from dashboard.pages.overview import (
+    _align_market_comparison,
     _asset_presentation_mode,
     _daily_dispatch_metrics,
     _dispatch_chart_rows,
@@ -121,6 +124,23 @@ def test_market_axis_never_extends_beyond_midnight():
     )
 
     assert day_range[-1] == "2026-07-18T00:00:00-07:00"
+
+
+def test_previous_market_day_is_aligned_by_clock_time_for_comparison():
+    aligned = _align_market_comparison(
+        [{
+            "timestamp": "2026-07-16T15:45:00-07:00",
+            "price_per_mwh": 36.25,
+        }],
+        comparison_date=date(2026, 7, 17),
+        zone="America/Los_Angeles",
+    )
+
+    assert aligned == [{
+        "timestamp": "2026-07-17T15:45:00-07:00",
+        "price_per_mwh": 36.25,
+        "source_timestamp": "2026-07-16T15:45:00-07:00",
+    }]
 
 
 def dispatch(**overrides):
