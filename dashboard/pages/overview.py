@@ -52,6 +52,11 @@ def _tone(value: object) -> str:
     return "positive" if number > 0 else "negative" if number < 0 else "neutral"
 
 
+def _caption_text(value: str) -> str:
+    """Prevent currency symbols from being parsed as inline math by Markdown."""
+    return value.replace("$", r"\$")
+
+
 def _numeric(value: object) -> float | None:
     if value is None:
         return None
@@ -331,11 +336,11 @@ def _performance_section(st, data: dict, currency: str, zone: str) -> None:
         f'{best_margin["label"]} at {_percent_label(best_margin["profit_margin"])}'
         if best_margin else "Not available"
     )
-    st.caption(
+    st.caption(_caption_text(
         f'Highest revenue · {best_revenue["label"]} ({format_currency(best_revenue["revenue"], currency)})'
         f' · Lowest profit · {lowest_profit["label"]} ({format_currency(lowest_profit["profit"], currency)})'
         f' · Best profit margin · {margin_text}'
-    )
+    ))
     energy = style_chart(
         daily_energy_figure(daily, theme=theme),
         title="Daily energy movement",
@@ -369,10 +374,10 @@ def _dispatch_section(st, data: dict, currency: str, zone: str) -> None:
         )
         st.plotly_chart(dispatch_chart, width="stretch", config=CHART_CONFIG)
         best = max(chart_rows, key=lambda row: row["profit"])
-        st.caption(
+        st.caption(_caption_text(
             f'Best dispatch · {best["label"]} ({format_currency(best["profit"], currency)} profit)'
             f' · Classification shown by hatch pattern and hover detail · {", ".join(classifications)}'
-        )
+        ))
     else:
         st.info("Complete dispatch economics are unavailable for charting; records remain in the table below.")
     rows = [{

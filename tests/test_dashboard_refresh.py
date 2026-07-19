@@ -12,6 +12,7 @@ from dashboard.pages.overview import (
     _daily_dispatch_metrics,
     _dispatch_chart_rows,
     _market_day_axis,
+    _caption_text,
 )
 from dashboard.refresh import STATE_KEY, refresh_dashboard_data
 
@@ -90,6 +91,12 @@ def test_shared_chart_style_uses_single_point_tooltips():
     )
 
     assert figure.layout.hovermode == "closest"
+
+
+def test_currency_in_captions_is_not_rendered_as_math_typography():
+    assert _caption_text("Revenue $3,255.24 · Profit $937.30") == (
+        r"Revenue \$3,255.24 · Profit \$937.30"
+    )
 
 
 def test_market_axis_extends_two_hours_beyond_latest_interval():
