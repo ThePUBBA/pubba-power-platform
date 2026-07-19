@@ -404,24 +404,24 @@ def install_console_theme(st) -> None:
         .stButton > button, .stFormSubmitButton > button {
             min-height: 2.65rem;
             border-radius: 10px;
-            color: var(--pubba-text) !important;
-            background: var(--pubba-card) !important;
+            color: #000 !important;
+            background: var(--pubba-accent) !important;
             font-family: var(--font-display);
             font-size: 1rem;
             font-weight: 400;
             letter-spacing: .035em;
             text-transform: uppercase;
-            border: 1px solid var(--pubba-border);
+            border: 1px solid var(--pubba-accent);
             transition: transform .15s ease, border-color .15s ease, opacity .15s ease;
         }
         .stButton > button *, .stFormSubmitButton > button * {
-            color: var(--pubba-text) !important;
+            color: #000 !important;
         }
         .stButton > button[kind="primary"],
         .stFormSubmitButton > button[kind="primary"] {
-            color: var(--pubba-text) !important;
-            background: var(--pubba-card) !important;
-            border-color: var(--pubba-border) !important;
+            color: #000 !important;
+            background: var(--pubba-accent) !important;
+            border-color: var(--pubba-accent) !important;
         }
         .stButton > button:hover, .stFormSubmitButton > button:hover {
             transform: translateY(-1px);
