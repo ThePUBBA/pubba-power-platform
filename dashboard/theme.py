@@ -71,18 +71,31 @@ def resolved_theme(st, preference: str = "system") -> ThemeTokens:
 
 def render_theme_selector(st, preference: str) -> None:
     """Render a compact accessible selector and persist it in URL/localStorage."""
-    selected = st.sidebar.radio(
+    selected = st.sidebar.segmented_control(
         "Appearance",
         PREFERENCES,
-        index=PREFERENCES.index(preference.title()),
-        horizontal=True,
-        key="pubba_theme_radio",
+        default=preference.title(),
+        selection_mode="single",
+        key="pubba_theme_selector",
     )
     chosen = normalize_preference(selected)
     if chosen != preference:
         st.session_state[PREFERENCE_KEY] = chosen
         st.query_params[PREFERENCE_KEY] = chosen
         st.rerun()
+    selected_position = PREFERENCES.index(preference.title()) + 1
+    st.sidebar.markdown(
+        f"""
+        <style>
+        [data-testid="stSidebar"] [data-baseweb="button-group"] button:nth-of-type({selected_position}),
+        [data-testid="stSidebar"] [role="group"] button:nth-of-type({selected_position}) {{
+            border-color: #44FFBB !important;
+            box-shadow: inset 0 0 0 1px #44FFBB !important;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
     st.sidebar.iframe(
         f"""
         <!doctype html><html><body style="margin:0;overflow:hidden"><script>
