@@ -31,6 +31,29 @@ class Client:
         return [{"asset_id": "BAT-001"}]
 
 
+class HistoricalMarketClient(Client):
+    requested_market = None
+
+    def get_dashboard_summary(self, **kwargs):
+        return {
+            "period": {"timezone": "America/Los_Angeles"},
+            "kpis": {},
+            "series": {"market_prices": []},
+            "metadata": {
+                "market_updated_at": "2026-07-19T10:05:00-07:00",
+                "market_location": "TH_NP15_GEN-APND",
+                "market_type": "RTM",
+            },
+        }
+
+    def get_lmp_prices(self, **kwargs):
+        self.requested_market = kwargs
+        return [{
+            "timestamp": "2026-07-18T10:05:00-07:00",
+            "lmp_prc": 31.25,
+        }]
+
+
 class FailedClient(Client):
     def get_dashboard_summary(self, **kwargs):
         raise DashboardApiError("temporary failure")
@@ -66,6 +89,23 @@ def test_refresh_loads_recommendations_without_direct_storage_access():
 
     assert error is None
     assert payload["recommendations"]["advisory_only"] is True
+
+
+def test_refresh_loads_previous_market_day_through_backend_when_summary_is_old():
+    client = HistoricalMarketClient()
+
+    payload, error = refresh_dashboard_data({}, client)
+
+    assert error is None
+    assert client.requested_market == {
+        "location": "TH_NP15_GEN-APND",
+        "market": "RTM",
+        "date": "2026-07-18",
+    }
+    assert payload["dashboard"]["series"]["previous_market_prices"] == [{
+        "timestamp": "2026-07-18T10:05:00-07:00",
+        "price_per_mwh": 31.25,
+    }]
 
 
 def test_single_point_trend_uses_categorical_axis():

@@ -122,6 +122,20 @@ class Only1ApiClient:
             )
         return payload
 
+    def get_lmp_prices(
+        self, *, location: str, market: str = "RTM", date: str | None = None,
+    ) -> list[dict]:
+        params = {"location": location, "market": market}
+        if date:
+            params["date"] = date
+        payload = self._request("get", "/lmp", params=params)
+        if not isinstance(payload, list) or any(not isinstance(item, dict) for item in payload):
+            raise DashboardApiError(
+                "The backend returned invalid market price data.",
+                code="invalid_response",
+            )
+        return payload
+
     def get_portfolio_assets(self) -> list[dict]:
         payload = self._request("get", "/portfolio/assets")
         if not isinstance(payload, list) or any(not isinstance(item, dict) for item in payload):
