@@ -71,24 +71,53 @@ def resolved_theme(st, preference: str = "system") -> ThemeTokens:
 
 def render_theme_selector(st, preference: str) -> None:
     """Render a compact accessible selector and persist it in URL/localStorage."""
-    selected = st.sidebar.segmented_control(
-        "Appearance",
-        PREFERENCES,
-        default=preference.title(),
-        selection_mode="single",
-        key="pubba_theme_selector",
+    st.sidebar.markdown(
+        '<div class="pubba-theme-label">Appearance</div>',
+        unsafe_allow_html=True,
     )
-    chosen = normalize_preference(selected)
-    if chosen != preference:
-        st.session_state[PREFERENCE_KEY] = chosen
-        st.query_params[PREFERENCE_KEY] = chosen
-        st.rerun()
-    st.iframe(
+    buttons = "".join(
+        f'<button type="button" data-theme="{option.lower()}" '
+        f'class="{"selected" if option.lower() == preference else ""}" '
+        f'aria-pressed="{str(option.lower() == preference).lower()}">{option}</button>'
+        for option in PREFERENCES
+    )
+    st.sidebar.iframe(
         f"""
-        <!doctype html><html><body><script>
+        <!doctype html>
+        <html class="{preference}"><head><style>
+        :root {{ color-scheme: dark; --surface:#111311; --text:#FFFFFF; --border:#303331; }}
+        html.light {{ color-scheme: light; --surface:#ECEFEE; --text:#111312; --border:#D8DDDA; }}
+        @media (prefers-color-scheme: light) {{
+          html.system {{ color-scheme: light; --surface:#ECEFEE; --text:#111312; --border:#D8DDDA; }}
+        }}
+        html, body {{ margin:0; padding:0; overflow:hidden; background:transparent; }}
+        .themes {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; }}
+        button {{
+          min-width:0; min-height:40px; border:1px solid var(--border); border-radius:10px;
+          background:var(--surface); color:var(--text); font:16px Inter,Arial,sans-serif;
+          cursor:pointer; transition:border-color .15s ease, box-shadow .15s ease;
+        }}
+        button:hover {{ border-color:#44FFBB; }}
+        button:focus-visible {{ outline:2px solid #44FFBB; outline-offset:2px; }}
+        button.selected {{ border-color:#44FFBB; box-shadow:inset 0 0 0 1px #44FFBB; }}
+        </style></head><body><div class="themes" role="group" aria-label="Appearance theme">
+        {buttons}
+        </div><script>
         (() => {{
           const key = "pubba-theme-preference";
           const current = "{preference}";
+          const apply = (choice) => {{
+            const parentUrl = new URL(window.parent.location.href);
+            parentUrl.searchParams.set("{PREFERENCE_KEY}", choice);
+            window.parent.localStorage.setItem(key, choice);
+            const nativeKey = `stActiveTheme-${{window.parent.location.pathname}}-v2`;
+            const nativeValue = choice.charAt(0).toUpperCase() + choice.slice(1);
+            window.parent.localStorage.setItem(nativeKey, JSON.stringify(nativeValue));
+            window.parent.location.assign(parentUrl.toString());
+          }};
+          document.querySelectorAll("button[data-theme]").forEach((button) => {{
+            button.addEventListener("click", () => apply(button.dataset.theme));
+          }});
           try {{
             const parentUrl = new URL(window.parent.location.href);
             const saved = window.parent.localStorage.getItem(key);
@@ -113,6 +142,6 @@ def render_theme_selector(st, preference: str) -> None:
         }})();
         </script></body></html>
         """,
-        height=1,
-        tab_index=-1,
+        height=48,
+        tab_index=0,
     )

@@ -593,6 +593,14 @@ def install_console_theme(st, theme) -> None:
         [data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {{
             color: var(--text-muted) !important;
         }}
+        .pubba-theme-label {{
+            color: var(--text-primary);
+            font-family: var(--font-display);
+            font-size: .95rem;
+            letter-spacing: .02em;
+            margin: .35rem 0 .45rem;
+            text-transform: uppercase;
+        }}
         [data-testid="stSegmentedControl"] button,
         [data-testid="stButtonGroup"] button,
         [data-baseweb="button-group"] button,
