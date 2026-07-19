@@ -593,20 +593,32 @@ def install_console_theme(st, theme) -> None:
         [data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {{
             color: var(--text-muted) !important;
         }}
-        [data-testid="stSegmentedControl"] button {{
+        [data-testid="stSegmentedControl"] button,
+        [data-testid="stButtonGroup"] button,
+        [data-baseweb="button-group"] button,
+        [data-testid="stSidebar"] [role="group"] button {{
             background: var(--bg-surface-secondary) !important;
             border-color: var(--border-default) !important;
             color: var(--text-primary) !important;
         }}
-        [data-testid="stSegmentedControl"] button * {{
+        [data-testid="stSegmentedControl"] button *,
+        [data-testid="stButtonGroup"] button *,
+        [data-baseweb="button-group"] button *,
+        [data-testid="stSidebar"] [role="group"] button * {{
             color: var(--text-primary) !important;
         }}
-        [data-testid="stSegmentedControl"] button[aria-pressed="true"] {{
+        [data-testid="stSegmentedControl"] button[aria-pressed="true"],
+        [data-testid="stButtonGroup"] button[aria-pressed="true"],
+        [data-baseweb="button-group"] button[aria-pressed="true"],
+        [data-testid="stSidebar"] [role="group"] button[aria-pressed="true"] {{
             background: var(--accent) !important;
             border-color: var(--accent) !important;
             color: var(--accent-foreground) !important;
         }}
-        [data-testid="stSegmentedControl"] button[aria-pressed="true"] * {{
+        [data-testid="stSegmentedControl"] button[aria-pressed="true"] *,
+        [data-testid="stButtonGroup"] button[aria-pressed="true"] *,
+        [data-baseweb="button-group"] button[aria-pressed="true"] *,
+        [data-testid="stSidebar"] [role="group"] button[aria-pressed="true"] * {{
             color: var(--accent-foreground) !important;
         }}
         [data-baseweb="popover"], [role="listbox"], [role="dialog"] {{
