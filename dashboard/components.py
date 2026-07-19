@@ -619,6 +619,13 @@ def install_console_theme(st, theme) -> None:
         [data-testid="stSidebar"] [role="group"] button * {{
             color: var(--text-primary) !important;
         }}
+        [data-testid="stSidebar"] [data-testid="stSegmentedControl"] button:hover,
+        [data-testid="stSidebar"] [data-testid="stButtonGroup"] button:hover,
+        [data-testid="stSidebar"] [data-baseweb="button-group"] button:hover,
+        [data-testid="stSidebar"] [role="group"] button:hover {{
+            border-color: var(--accent) !important;
+            box-shadow: inset 0 0 0 1px var(--accent) !important;
+        }}
         [data-testid="stSegmentedControl"] button[aria-pressed="true"],
         [data-testid="stButtonGroup"] button[aria-pressed="true"],
         [data-baseweb="button-group"] button[aria-pressed="true"],
