@@ -68,14 +68,14 @@ def style_chart(
 ) -> go.Figure:
     palette = chart_palette(theme)
     title_text = title + (
-        f"<br><sup style='color:{palette['muted']};font-family:Inter,Arial,sans-serif'>"
+        f"<br><sup style='color:{palette['muted']};font:500 14px/1.5 Inter,Arial,sans-serif'>"
         f"{subtitle}</sup>" if subtitle else ""
     )
     fig.update_layout(
         title={
             "text": title_text,
             "font": {
-                "size": 18,
+                "size": 21,
                 "color": palette["primary"],
                 "family": "Bebas Neue, Arial Narrow, Arial, sans-serif",
             },
@@ -83,23 +83,23 @@ def style_chart(
         height=height,
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        font={"color": palette["primary"], "family": "Inter, Arial, sans-serif", "size": 12},
+        font={"color": palette["primary"], "family": "Inter, Arial, sans-serif", "size": 14},
         margin={"l": 64, "r": 52, "t": 82, "b": 68},
         hovermode="closest",
-        hoverlabel={"bgcolor": palette["surface"], "bordercolor": palette["grid"], "font_color": palette["primary"]},
-        legend={"orientation": "h", "y": 1.12, "x": 1, "xanchor": "right"},
+        hoverlabel={"bgcolor": palette["surface"], "bordercolor": palette["grid"], "font_color": palette["primary"], "font_size": 14},
+        legend={"orientation": "h", "y": 1.12, "x": 1, "xanchor": "right", "font": {"size": 14}},
     )
     fig.update_xaxes(
         gridcolor=palette["grid"],
         zeroline=False,
-        tickfont={"color": palette["muted"]},
+        tickfont={"color": palette["muted"], "size": 14},
         automargin=True,
     )
     fig.update_yaxes(
         gridcolor=palette["grid"],
         zeroline=False,
         title=y_title,
-        tickfont={"color": palette["muted"]},
+        tickfont={"color": palette["muted"], "size": 14},
         automargin=True,
         exponentformat="none",
         showexponent="none",

@@ -1,6 +1,7 @@
 [theme]
 primaryColor = "#44FFBB"
 base = "dark"
+baseFontSize = 16
 
 [theme.dark]
 backgroundColor = "#080A09"

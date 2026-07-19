@@ -12,6 +12,15 @@ def install_console_theme(st, theme) -> None:
         :root {
             --font-display: "Bebas Neue", "Arial Narrow", Arial, sans-serif;
             --font-body: Inter, Arial, Helvetica, sans-serif;
+            --type-page-title: clamp(2.625rem, 4vw, 3.25rem);
+            --type-section-title: 1.375rem;
+            --type-card-title: 1.125rem;
+            --type-body: 1rem;
+            --type-secondary: .9375rem;
+            --type-meta: .875rem;
+            --line-body: 1.55;
+            --weight-body: 400;
+            --weight-emphasis: 600;
             --pubba-accent: #44FFBB;
             --pubba-bg: #000000;
             --pubba-surface: #0F0F0F;
@@ -26,12 +35,20 @@ def install_console_theme(st, theme) -> None:
         html, body, [class*="css"] {
             color: var(--pubba-text);
             font-family: var(--font-body);
+            font-size: var(--type-body);
+            line-height: var(--line-body);
         }
         .stApp {
             background: var(--pubba-bg);
             color: var(--pubba-text);
             font-family: var(--font-body);
         }
+        [data-testid="stMarkdownContainer"] p,
+        [data-testid="stMarkdownContainer"] li {{
+            font-family: var(--font-body);
+            font-size: var(--type-body);
+            line-height: var(--line-body);
+        }}
         [data-testid="stAppViewContainer"] > .main {
             background: var(--pubba-bg);
         }
@@ -97,10 +114,10 @@ def install_console_theme(st, theme) -> None:
             border-radius: 10px;
             padding: .62rem .7rem;
             transition: background .16s ease, border-color .16s ease;
-            font-family: var(--font-display);
+            font-family: var(--font-body);
             font-size: 1rem;
-            letter-spacing: .025em;
-            text-transform: uppercase;
+            font-weight: var(--weight-emphasis);
+            letter-spacing: .005em;
         }
         [data-testid="stSidebar"] [role="radiogroup"] label:hover {
             background: #141414;
@@ -116,7 +133,8 @@ def install_console_theme(st, theme) -> None:
             align-items: center;
             gap: .55rem;
             color: var(--pubba-muted);
-            font-size: .76rem;
+            font-size: var(--type-meta);
+            font-weight: 500;
             padding: .65rem .15rem;
         }
         .pubba-connection-dot {
@@ -152,7 +170,7 @@ def install_console_theme(st, theme) -> None:
         }
         .pubba-title {
             color: var(--pubba-text);
-            font-size: clamp(2rem, 4vw, 3rem);
+            font-size: var(--type-page-title);
             font-family: var(--font-display);
             line-height: 1;
             font-weight: 400;
@@ -161,8 +179,8 @@ def install_console_theme(st, theme) -> None:
         }
         .pubba-description {
             color: var(--pubba-muted);
-            font-size: .95rem;
-            line-height: 1.55;
+            font-size: var(--type-body);
+            line-height: var(--line-body);
             margin-top: .7rem;
             max-width: 680px;
             font-family: var(--font-body);
@@ -199,7 +217,7 @@ def install_console_theme(st, theme) -> None:
         .pubba-section-title {
             color: var(--pubba-text);
             font-family: var(--font-display);
-            font-size: 1.2rem;
+            font-size: var(--type-section-title);
             font-weight: 400;
             letter-spacing: .025em;
             line-height: 1.1;
@@ -215,7 +233,7 @@ def install_console_theme(st, theme) -> None:
             background: var(--pubba-card);
             border: 1px solid var(--pubba-border);
             border-radius: var(--pubba-radius);
-            padding: 1.1rem 1.15rem;
+            padding: 1.2rem 1.25rem;
             min-height: 150px;
             margin-bottom: .9rem;
             box-shadow: 0 12px 32px rgba(0, 0, 0, .2);
@@ -227,7 +245,7 @@ def install_console_theme(st, theme) -> None:
         }
         .pubba-kpi-label {
             color: var(--pubba-muted);
-            font-size: .7rem;
+            font-size: var(--type-meta);
             font-family: var(--font-display);
             font-weight: 400;
             text-transform: uppercase;
@@ -245,13 +263,14 @@ def install_console_theme(st, theme) -> None:
         }
         .pubba-kpi-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
         .pubba-kpi-icon { color: var(--pubba-muted); font-size: 1rem; }
-        .pubba-kpi-subtitle { color: var(--pubba-muted); font-size: .72rem; line-height: 1.4; margin-top: .65rem; }
+        .pubba-kpi-subtitle { color: var(--pubba-muted); font: 500 var(--type-secondary)/1.5 var(--font-body); margin-top: .7rem; }
         .pubba-positive { border-top: 2px solid var(--pubba-accent); }
         .pubba-negative { border-top: 2px solid var(--pubba-danger); }
         .pubba-neutral { border-top: 2px solid #404040; }
         .pubba-meta {
             color: var(--pubba-muted);
-            font-size: .78rem;
+            font-size: var(--type-secondary);
+            font-weight: 500;
         }
         .pubba-notice {
             display: flex;
@@ -262,10 +281,10 @@ def install_console_theme(st, theme) -> None:
             border: 1px solid var(--pubba-border);
             border-left: 3px solid var(--pubba-accent);
             border-radius: 12px;
-            padding: .9rem 1rem;
+            padding: 1rem 1.1rem;
             font-family: var(--font-body);
-            font-size: .9rem;
-            line-height: 1.5;
+            font-size: var(--type-body);
+            line-height: var(--line-body);
         }
         .pubba-notice-dot {
             width: 7px;
@@ -286,12 +305,12 @@ def install_console_theme(st, theme) -> None:
             background: var(--pubba-card);
             border: 1px solid var(--pubba-border);
             border-radius: 12px;
-            padding: .8rem .9rem;
+            padding: .9rem 1rem;
         }
         .pubba-summary-label {
             color: var(--pubba-muted);
             font-family: var(--font-display);
-            font-size: .68rem;
+            font-size: var(--type-meta);
             letter-spacing: .06em;
             text-transform: uppercase;
         }
@@ -313,7 +332,7 @@ def install_console_theme(st, theme) -> None:
             background: var(--pubba-card);
             border: 1px solid var(--pubba-border);
             border-radius: var(--pubba-radius);
-            padding: 1.1rem;
+            padding: 1.2rem;
         }
         .pubba-asset-head {
             display: flex;
@@ -337,7 +356,8 @@ def install_console_theme(st, theme) -> None:
         }
         .pubba-asset-meta {
             color: var(--pubba-muted);
-            font-size: .76rem;
+            font-size: var(--type-secondary);
+            line-height: 1.5;
             margin-top: .3rem;
         }
         .pubba-asset-metrics {
@@ -351,7 +371,7 @@ def install_console_theme(st, theme) -> None:
             display: flex;
             justify-content: space-between;
             color: var(--pubba-muted);
-            font-size: .75rem;
+            font-size: var(--type-meta);
             margin-bottom: .35rem;
         }
         .pubba-soc-track {
@@ -369,13 +389,14 @@ def install_console_theme(st, theme) -> None:
         .pubba-asset-metric-label {
             color: var(--pubba-muted);
             font-family: var(--font-display);
-            font-size: .65rem;
+            font-size: var(--type-meta);
             letter-spacing: .05em;
             text-transform: uppercase;
         }
         .pubba-asset-metric-value {
             color: var(--pubba-text);
-            font-size: .86rem;
+            font-size: var(--type-secondary);
+            line-height: 1.5;
             margin-top: .2rem;
         }
 
@@ -452,6 +473,8 @@ def install_console_theme(st, theme) -> None:
             overflow: hidden;
             background: var(--pubba-card);
             font-family: var(--font-body);
+            font-size: var(--type-body);
+            line-height: 1.5;
         }
         [data-testid="stPlotlyChart"] {
             background: var(--pubba-card);
@@ -470,12 +493,12 @@ def install_console_theme(st, theme) -> None:
             border-radius: 12px;
             padding: .85rem 1rem;
         }
-        .pubba-status-meta { color: var(--pubba-muted); font-size: .7rem; line-height: 1.45; margin-top: .4rem; }
+        .pubba-status-meta { color: var(--pubba-muted); font-size: var(--type-meta); font-weight: 500; line-height: 1.5; margin-top: .45rem; }
         .pubba-capability-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: .75rem; }
-        .pubba-capability { min-height: 175px; background: var(--pubba-card); border: 1px solid var(--pubba-border); border-radius: var(--pubba-radius); padding: 1rem; }
-        .pubba-capability-title { font-family: var(--font-display); font-size: 1.05rem; letter-spacing: .025em; }
-        .pubba-capability-status { color: var(--pubba-accent); font-size: .7rem; margin: .6rem 0; text-transform: uppercase; }
-        .pubba-capability-copy { color: var(--pubba-muted); font-size: .76rem; line-height: 1.5; }
+        .pubba-capability { min-height: 175px; background: var(--pubba-card); border: 1px solid var(--pubba-border); border-radius: var(--pubba-radius); padding: 1.1rem; }
+        .pubba-capability-title { font-family: var(--font-display); font-size: var(--type-card-title); letter-spacing: .025em; }
+        .pubba-capability-status { color: var(--pubba-accent); font: 600 var(--type-meta)/1.4 var(--font-body); margin: .65rem 0; text-transform: uppercase; }
+        .pubba-capability-copy { color: var(--pubba-muted); font: 400 var(--type-secondary)/1.55 var(--font-body); }
         .pubba-environment { color: #000; background: var(--pubba-accent); border-radius: 999px; padding: .28rem .55rem; font: .72rem var(--font-display); letter-spacing: .04em; text-transform: uppercase; }
         .pubba-live-dot { animation: pubbaPulse 1.8s ease-in-out infinite; }
         @keyframes pubbaPulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
@@ -495,14 +518,18 @@ def install_console_theme(st, theme) -> None:
         small, .stCaption, [data-testid="stCaptionContainer"] {
             color: var(--pubba-muted) !important;
             font-family: var(--font-body) !important;
+            font-size: var(--type-meta) !important;
+            font-weight: 500 !important;
+            line-height: 1.5 !important;
         }
         input, textarea, [data-baseweb="select"] {
             font-family: var(--font-body) !important;
         }
         [data-testid="stWidgetLabel"] p {
-            font-family: var(--font-display);
-            font-size: .95rem;
-            letter-spacing: .02em;
+            font-family: var(--font-body);
+            font-size: var(--type-secondary);
+            font-weight: var(--weight-emphasis);
+            letter-spacing: .005em;
         }
         @media (max-width: 768px) {
             .block-container { padding: 2rem 1rem 3rem; }
@@ -659,11 +686,29 @@ def install_console_theme(st, theme) -> None:
             background: var(--bg-surface) !important;
             color: var(--text-primary) !important;
             border-color: var(--border-default) !important;
+            font-family: var(--font-body) !important;
+            font-size: var(--type-body) !important;
+            line-height: 1.5 !important;
         }}
         [data-testid="stDataFrame"], [data-testid="stTable"],
         [data-testid="stPlotlyChart"], [data-testid="stExpander"] {{
             background: var(--bg-surface);
             color: var(--text-primary);
+        }}
+        [data-testid="stTable"] th,
+        [data-testid="stDataFrame"] th {{
+            color: var(--text-primary) !important;
+            font-size: var(--type-secondary) !important;
+            font-weight: var(--weight-emphasis) !important;
+        }}
+        [data-testid="stTable"] td,
+        [data-testid="stDataFrame"] td {{
+            color: var(--text-primary) !important;
+            font-size: var(--type-body) !important;
+            line-height: 1.5 !important;
+        }}
+        [aria-disabled="true"], :disabled {{
+            opacity: .58 !important;
         }}
         ::-webkit-scrollbar-thumb {{ background: var(--border-strong); }}
         a, button, input, textarea, select, [tabindex]:not([tabindex="-1"]) {{

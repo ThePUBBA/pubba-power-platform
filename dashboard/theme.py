@@ -25,12 +25,12 @@ class ThemeTokens:
 THEMES = {
     "dark": ThemeTokens(
         "dark", "#080A09", "#080808", "#171817", "#111311",
-        "#FFFFFF", "#B5B7B6", "#8F9491", "#303331", "#3B403D",
+        "#FFFFFF", "#C0C5C2", "#929995", "#303331", "#3B403D",
         "#171817", "#1D211F", "rgba(0, 0, 0, .24)",
     ),
     "light": ThemeTokens(
         "light", "#F4F6F5", "#FFFFFF", "#FFFFFF", "#ECEFEE",
-        "#111312", "#555B58", "#737A76", "#D8DDDA", "#BFC6C2",
+        "#111312", "#4F5753", "#69716D", "#D8DDDA", "#BFC6C2",
         "#FFFFFF", "#E8ECEA", "rgba(17, 19, 18, .08)",
     ),
 }

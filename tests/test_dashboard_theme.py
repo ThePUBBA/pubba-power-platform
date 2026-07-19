@@ -57,3 +57,22 @@ def test_dark_chart_palette_preserves_command_center_character():
     assert palette["primary"] == "#FFFFFF"
     assert palette["surface"] == "#171817"
     assert palette["grid"] == "#303331"
+
+
+def test_typography_tokens_and_readable_muted_colors_are_centralized():
+    css = Path("dashboard/components.py").read_text()
+
+    assert "--type-body: 1rem" in css
+    assert "--type-secondary: .9375rem" in css
+    assert "--type-meta: .875rem" in css
+    assert "--line-body: 1.55" in css
+    assert THEMES["dark"].text_muted == "#929995"
+    assert THEMES["light"].text_muted == "#69716D"
+
+
+def test_chart_typography_is_readable_without_crowding():
+    figure = style_chart(go.Figure(), title="Market", theme="dark")
+
+    assert figure.layout.font.size == 14
+    assert figure.layout.title.font.size == 21
+    assert figure.layout.hoverlabel.font.size == 14
